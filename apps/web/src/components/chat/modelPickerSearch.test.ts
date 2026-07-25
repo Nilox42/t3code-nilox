@@ -128,4 +128,16 @@ describe("scoreModelPickerSearch", () => {
       ),
     ).not.toBeNull();
   });
+
+  it("indexes both Pi Agent and its upstream provider/model names", () => {
+    const piModel = {
+      driverKind: "piAgent",
+      providerDisplayName: "Pi Agent",
+      name: "Claude Sonnet",
+      subProvider: "Anthropic",
+    };
+
+    expect(scoreModelPickerSearch(piModel, "pi agent")).not.toBeNull();
+    expect(scoreModelPickerSearch(piModel, "anthropic sonnet")).not.toBeNull();
+  });
 });

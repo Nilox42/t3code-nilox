@@ -37,6 +37,26 @@ describe("ProviderSettingsForm helpers", () => {
     });
   });
 
+  it("registers Pi Agent as an Early Access provider with generic settings fields", () => {
+    const pi = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("piAgent")];
+
+    expect(pi).toMatchObject({
+      label: "Pi Agent",
+      badgeLabel: "Early Access",
+    });
+    const fields = deriveProviderSettingsFields(pi!);
+    expect(fields.map((field) => field.key)).toEqual([
+      "binaryPath",
+      "agentDir",
+      "launchArgs",
+      "trustProjectResources",
+    ]);
+    expect(fields.find((field) => field.key === "trustProjectResources")).toMatchObject({
+      control: "switch",
+      defaultBooleanValue: false,
+    });
+  });
+
   it("preserves unknown config keys while omitting empty configurable fields", () => {
     const opencode = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("opencode")];
     expect(opencode).toBeDefined();

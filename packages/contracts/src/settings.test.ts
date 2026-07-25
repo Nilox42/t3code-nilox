@@ -124,6 +124,46 @@ describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
   });
 });
 
+describe("ServerSettings Pi Agent", () => {
+  it("hydrates safe Pi defaults into old settings", () => {
+    const decoded = decodeServerSettings({
+      providers: {
+        codex: { binaryPath: "/opt/codex" },
+      },
+    });
+
+    expect(decoded.providers.piAgent).toEqual({
+      enabled: true,
+      binaryPath: "pi",
+      agentDir: "",
+      launchArgs: "",
+      trustProjectResources: false,
+    });
+  });
+
+  it("decodes and normalizes Pi patches", () => {
+    expect(
+      decodeServerSettingsPatch({
+        providers: {
+          piAgent: {
+            enabled: false,
+            binaryPath: "  /opt/pi  ",
+            agentDir: "  ~/.pi-work  ",
+            launchArgs: "  --verbose  ",
+            trustProjectResources: true,
+          },
+        },
+      }).providers?.piAgent,
+    ).toEqual({
+      enabled: false,
+      binaryPath: "/opt/pi",
+      agentDir: "~/.pi-work",
+      launchArgs: "--verbose",
+      trustProjectResources: true,
+    });
+  });
+});
+
 describe("ServerSettings worktree defaults", () => {
   it("defaults start-from-origin on for legacy configs", () => {
     expect(decodeServerSettings({}).newWorktreesStartFromOrigin).toBe(true);

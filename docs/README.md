@@ -15,5 +15,5 @@
 - [Integrations](./integrations/source-control-providers.md)
 - [Mobile](./mobile/app.md)
 - [Operations](./operations/ci.md)
-- [Providers](./providers/codex.md)
+- [Providers](./providers/codex.md), including [Pi Agent](./providers/pi.md)
 - [Reference](./reference/encyclopedia.md)
