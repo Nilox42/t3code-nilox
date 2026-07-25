@@ -116,7 +116,7 @@ jobs:
             echo
             echo "### Assets"
             echo
-            echo "- \`T3-Code-${{ steps.release.outputs.version }}-x64.AppImage\`: Linux x64 desktop app"
+            echo "- \`T3-Code-${{ steps.release.outputs.version }}-x86_64.AppImage\`: Linux x64 desktop app"
             echo "- \`${{ steps.release.outputs.server_asset }}\`: remote Linux server/CLI package"
             echo
             echo "The AppImage embeds the server asset URL, so its SSH environment flow starts this exact fork build on the remote host."

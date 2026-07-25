@@ -3,7 +3,7 @@
 The Pi fork release workflow builds the Linux desktop and remote server from the same commit and
 publishes both files in one GitHub release:
 
-- `T3-Code-<version>-x64.AppImage` — Linux x64 desktop application.
+- `T3-Code-<version>-x86_64.AppImage` — Linux x64 desktop application.
 - `t3-<version>.tgz` — installable T3 server/CLI package for a Linux remote host.
 - `latest-linux.yml` and related files — desktop update metadata.
 - `SHA256SUMS` — checksums for the published artifacts.
@@ -36,8 +36,8 @@ Download the AppImage and checksum file from the release, then:
 
 ```bash
 sha256sum --check SHA256SUMS --ignore-missing
-chmod +x T3-Code-0.0.29-pi.1-x64.AppImage
-./T3-Code-0.0.29-pi.1-x64.AppImage
+chmod +x T3-Code-0.0.29-pi.1-x86_64.AppImage
+./T3-Code-0.0.29-pi.1-x86_64.AppImage
 ```
 
 For isolated fork state alongside an official installation:
@@ -45,7 +45,7 @@ For isolated fork state alongside an official installation:
 ```bash
 T3CODE_HOME="$HOME/.t3-pi" \
 XDG_CONFIG_HOME="$HOME/.config/t3code-pi" \
-./T3-Code-0.0.29-pi.1-x64.AppImage
+./T3-Code-0.0.29-pi.1-x86_64.AppImage
 ```
 
 The locally built AppImage points desktop updates at releases in this fork, not the upstream
