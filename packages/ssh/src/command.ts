@@ -368,7 +368,13 @@ export function resolveRemoteT3CliPackageSpec(input: {
   readonly appVersion: string;
   readonly updateChannel: DesktopUpdateChannel;
   readonly isDevelopment?: boolean;
+  readonly packageSpecOverride?: string;
 }): string {
+  const packageSpecOverride = input.packageSpecOverride?.trim();
+  if (packageSpecOverride) {
+    return packageSpecOverride;
+  }
+
   const appVersion = input.appVersion.trim();
   if (!input.isDevelopment && PUBLISHABLE_T3_VERSION_PATTERN.test(appVersion)) {
     return `t3@${appVersion}`;

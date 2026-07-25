@@ -59,6 +59,13 @@ import * as DesktopWindow from "./window/DesktopWindow.ts";
 import * as DesktopWslBackend from "./wsl/DesktopWslBackend.ts";
 import * as DesktopWslEnvironment from "./wsl/DesktopWslEnvironment.ts";
 
+declare const __T3CODE_BUILD_REMOTE_CLI_PACKAGE_SPEC__: string | undefined;
+
+const embeddedRemoteCliPackageSpec =
+  typeof __T3CODE_BUILD_REMOTE_CLI_PACKAGE_SPEC__ === "undefined"
+    ? ""
+    : __T3CODE_BUILD_REMOTE_CLI_PACKAGE_SPEC__.trim();
+
 const desktopEnvironmentLayer = Layer.unwrap(
   Effect.gen(function* () {
     const metadata = yield* Effect.service(ElectronApp.ElectronApp).pipe(
@@ -92,7 +99,9 @@ const resolveDesktopSshCliRunner = (
       appVersion: environment.appVersion,
       updateChannel: settings.updateChannel,
       isDevelopment: environment.isDevelopment,
+      packageSpecOverride: embeddedRemoteCliPackageSpec,
     }),
+    preferPackageSpec: embeddedRemoteCliPackageSpec.length > 0,
     nodeEngineRange: serverPackageJson.engines.node,
   };
 };

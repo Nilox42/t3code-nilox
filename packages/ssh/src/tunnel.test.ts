@@ -132,6 +132,17 @@ describe("ssh tunnel scripts", () => {
     assert.notInclude(script, "exec npx --yes t3@nightly; touch /tmp/t3-owned");
   });
 
+  it("can prefer a release package over an installed global t3 command", () => {
+    const script = buildRemoteT3RunnerScript({
+      packageSpec:
+        "https://github.com/Nilox42/t3code-nilox/releases/download/pi-v0.0.29-pi.1/t3-0.0.29-pi.1.tgz",
+      preferPackageSpec: true,
+    });
+
+    assert.include(script, "T3_PREFER_PACKAGE_SPEC=1");
+    assert.include(script, 'if [ "$T3_PREFER_PACKAGE_SPEC" != "1" ] && command -v t3');
+  });
+
   it("builds the remote t3 runner with a node script override", () => {
     const script = buildRemoteT3RunnerScript({
       nodeScriptPath: "/Users/julius/Development/Work/codething-mvp/apps/server/dist/bin.mjs",

@@ -131,6 +131,15 @@ describe("ssh command", () => {
         }),
         "t3@nightly",
       );
+      assert.equal(
+        resolveRemoteT3CliPackageSpec({
+          appVersion: "0.0.29-pi.1",
+          updateChannel: "latest",
+          packageSpecOverride:
+            " https://github.com/Nilox42/t3code-nilox/releases/download/pi-v0.0.29-pi.1/t3-0.0.29-pi.1.tgz ",
+        }),
+        "https://github.com/Nilox42/t3code-nilox/releases/download/pi-v0.0.29-pi.1/t3-0.0.29-pi.1.tgz",
+      );
     }),
   );
 

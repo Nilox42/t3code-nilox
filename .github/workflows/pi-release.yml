@@ -1,0 +1,153 @@
+name: Pi Fork Release
+
+on:
+  push:
+    tags:
+      - "pi-v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Semver without the pi-v tag prefix (for example 0.0.29-pi.1)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pi-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-linux-release:
+    name: Build AppImage and remote server
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release metadata
+        id: release
+        shell: bash
+        env:
+          DISPATCH_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$GITHUB_REF" == refs/tags/pi-v* ]]; then
+            tag="$GITHUB_REF_NAME"
+            version="${tag#pi-v}"
+          else
+            version="${DISPATCH_VERSION#pi-v}"
+            tag="pi-v${version}"
+          fi
+
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid release version: $version" >&2
+            exit 1
+          fi
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "server_asset=t3-${version}.tgz" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Install Linux packaging tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v magick >/dev/null 2>&1 && ! command -v convert >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y imagemagick
+          fi
+
+      - name: Ensure Electron runtime is installed
+        run: vp run --filter @t3tools/desktop ensure:electron
+
+      - name: Align package versions
+        run: node scripts/update-release-package-versions.ts "${{ steps.release.outputs.version }}"
+
+      - name: Build remote server package
+        shell: bash
+        run: |
+          set -euo pipefail
+          vp run --filter t3 build
+          node apps/server/scripts/cli.ts pack \
+            --app-version "${{ steps.release.outputs.version }}" \
+            --pack-destination release \
+            --verbose
+          test -f "release/${{ steps.release.outputs.server_asset }}"
+
+      - name: Build Linux AppImage
+        env:
+          T3CODE_DESKTOP_UPDATE_REPOSITORY: ${{ github.repository }}
+          T3CODE_REMOTE_CLI_PACKAGE_SPEC: https://github.com/${{ github.repository }}/releases/download/${{ steps.release.outputs.tag }}/${{ steps.release.outputs.server_asset }}
+        run: |
+          vp run dist:desktop:artifact \
+            --platform linux \
+            --target AppImage \
+            --arch x64 \
+            --build-version "${{ steps.release.outputs.version }}" \
+            --output-dir release \
+            --verbose
+
+      - name: Write checksums and release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          (
+            cd release
+            sha256sum ./*.AppImage ./*.tgz ./*.yml > SHA256SUMS
+          )
+
+          {
+            echo "## T3 Code Pi fork"
+            echo
+            echo "This release contains a matching Linux desktop and remote server built from commit \`$GITHUB_SHA\`."
+            echo
+            echo "### Assets"
+            echo
+            echo "- \`T3-Code-${{ steps.release.outputs.version }}-x64.AppImage\`: Linux x64 desktop app"
+            echo "- \`${{ steps.release.outputs.server_asset }}\`: remote Linux server/CLI package"
+            echo
+            echo "The AppImage embeds the server asset URL, so its SSH environment flow starts this exact fork build on the remote host."
+            echo
+            echo "The remote host needs Node.js \`^22.16 || ^23.11 || >=24.10\` and the Pi CLI installed."
+          } > release-notes.md
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: t3-code-pi-${{ steps.release.outputs.version }}-linux-x64
+          path: |
+            release/*.AppImage
+            release/*.tgz
+            release/*.yml
+            release/SHA256SUMS
+          if-no-files-found: error
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create "${{ steps.release.outputs.tag }}" \
+            release/*.AppImage \
+            release/*.tgz \
+            release/*.yml \
+            release/SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "T3 Code Pi ${{ steps.release.outputs.version }}" \
+            --notes-file release-notes.md \
+            --latest

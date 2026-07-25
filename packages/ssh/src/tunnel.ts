@@ -59,6 +59,7 @@ const REMOTE_REUSE_READY_TIMEOUT_MS = 2_000;
 
 export interface RemoteT3RunnerOptions {
   readonly packageSpec?: string;
+  readonly preferPackageSpec?: boolean;
   readonly nodeScriptPath?: string | null;
   readonly nodeEngineRange?: string | null;
 }
@@ -415,6 +416,7 @@ set -eu
 @@T3_NODE_ENV_SCRIPT@@
 ensure_remote_node_path || true
 T3_NODE_SCRIPT_PATH=@@T3_NODE_SCRIPT_PATH@@
+T3_PREFER_PACKAGE_SPEC=@@T3_PREFER_PACKAGE_SPEC@@
 if [ -n "$T3_NODE_SCRIPT_PATH" ]; then
   if ! command -v node >/dev/null 2>&1; then
     printf 'Remote host is missing node on PATH. Install Node or configure a supported version manager for non-interactive shells.\\n' >&2
@@ -422,7 +424,7 @@ if [ -n "$T3_NODE_SCRIPT_PATH" ]; then
   fi
   exec node "$T3_NODE_SCRIPT_PATH" "$@"
 fi
-if command -v t3 >/dev/null 2>&1; then
+if [ "$T3_PREFER_PACKAGE_SPEC" != "1" ] && command -v t3 >/dev/null 2>&1; then
   exec t3 "$@"
 fi
 if command -v npx >/dev/null 2>&1; then
@@ -637,6 +639,7 @@ export function buildRemoteT3RunnerScript(input?: RemoteT3RunnerOptions): string
     applyScriptPlaceholders(REMOTE_RUNNER_SCRIPT, {
       T3_PACKAGE_SPEC: packageSpec,
       T3_NODE_SCRIPT_PATH: shellSingleQuote(nodeScriptPath),
+      T3_PREFER_PACKAGE_SPEC: input?.preferPackageSpec === true ? "1" : "0",
       T3_NODE_ENV_SCRIPT: buildRemoteNodeEnvScript(input),
     }),
   );
