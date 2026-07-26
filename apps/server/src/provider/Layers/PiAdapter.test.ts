@@ -2,6 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import {
   ApprovalRequestId,
+  EnvironmentId,
   ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
@@ -18,6 +19,8 @@ import { describe, expect } from "vite-plus/test";
 
 import { attachmentRelativePath } from "../../attachmentStore.ts";
 import * as ServerConfig from "../../config.ts";
+import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import { PI_MCP_ADAPTER_REQUIRED_MESSAGE, type PiMcpBridgeCapability } from "../pi/PiMcpBridge.ts";
 import {
   makePiAdapter,
   piApprovalExtensionResponse,
@@ -35,6 +38,11 @@ const makeFixture = Effect.fn("makePiAdapterFixture")(function* (
   environment: NodeJS.ProcessEnv = {},
   instanceId = PI_INSTANCE,
   agentDir = "",
+  mcpBridge: PiMcpBridgeCapability = {
+    available: false,
+    reason: "adapter-not-installed",
+    message: PI_MCP_ADAPTER_REQUIRED_MESSAGE,
+  },
 ) {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -62,6 +70,7 @@ const makeFixture = Effect.fn("makePiAdapterFixture")(function* (
         ...environment,
       },
       extensionPath: "/tmp/t3-pi-test-extension.mjs",
+      mcpBridge,
     },
   );
   return { adapter, sessionFile };
@@ -71,6 +80,31 @@ const collectThrough = (
   stream: Stream.Stream<ProviderRuntimeEvent>,
   eventType: ProviderRuntimeEvent["type"],
 ) => Stream.runCollect(Stream.takeUntil(stream, (event) => event.type === eventType));
+
+function isMcpBridgeUnavailableWarning(event: ProviderRuntimeEvent): boolean {
+  if (event.type !== "runtime.warning") return false;
+  const detail = event.payload.detail;
+  return (
+    typeof detail === "object" &&
+    detail !== null &&
+    "code" in detail &&
+    detail.code === "pi_mcp_bridge_unavailable"
+  );
+}
+
+const installMcpSession = Effect.fn("installPiMcpSession")(function* (threadId: ThreadId) {
+  McpProviderSession.setMcpProviderSession({
+    environmentId: EnvironmentId.make("local"),
+    threadId,
+    providerSessionId: "pi-mcp-test",
+    providerInstanceId: PI_INSTANCE,
+    endpoint: "http://127.0.0.1:43123/mcp",
+    authorizationHeader: "Bearer thread-secret",
+  });
+  yield* Effect.addFinalizer(() =>
+    Effect.sync(() => McpProviderSession.clearMcpProviderSession(threadId)),
+  );
+});
 
 describe("PiAdapter lifecycle and event mapping", () => {
   it.effect(
@@ -264,6 +298,84 @@ describe("PiAdapter lifecycle and event mapping", () => {
       expect(secondSession.providerInstanceId).toBe(secondId);
       expect(firstSession.resumeCursor).toMatchObject({ sessionId: "pi-work-session" });
       expect(secondSession.resumeCursor).toMatchObject({ sessionId: "pi-personal-session" });
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("injects the per-thread T3 browser MCP connection into Pi", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const logDir = yield* fileSystem.makeTempDirectory({ prefix: "pi-mcp-log-" });
+      const requestLog = path.join(logDir, "requests.jsonl");
+      const mcpConfigPath = path.join(logDir, "t3-mcp.json");
+      const { adapter } = yield* makeFixture(
+        { T3_PI_MOCK_REQUEST_LOG: requestLog },
+        PI_INSTANCE,
+        "",
+        { available: true, configPath: mcpConfigPath },
+      );
+      const threadId = ThreadId.make("pi-mcp-enabled");
+      yield* installMcpSession(threadId);
+
+      yield* adapter.startSession({
+        provider: PI,
+        threadId,
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+
+      const source = yield* fileSystem.readFileString(requestLog);
+      const [entry] = source
+        .trim()
+        .split("\n")
+        .map(
+          (line) =>
+            JSON.parse(line) as {
+              args: Array<string>;
+              environment: {
+                mcpEndpoint?: string;
+                hasMcpBearerToken: boolean;
+                mcpBridgeEnabled?: string;
+              };
+            },
+        );
+      expect(entry?.args).toContain("--mcp-config");
+      expect(entry?.args).toContain(mcpConfigPath);
+      expect(entry?.environment).toEqual({
+        mcpEndpoint: "http://127.0.0.1:43123/mcp",
+        hasMcpBearerToken: true,
+        mcpBridgeEnabled: "1",
+      });
+      expect(source).not.toContain("thread-secret");
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("warns in the thread when Pi cannot receive the browser MCP connection", () =>
+    Effect.gen(function* () {
+      const { adapter } = yield* makeFixture();
+      const threadId = ThreadId.make("pi-mcp-unavailable");
+      yield* installMcpSession(threadId);
+      const warningFiber = yield* Stream.runHead(
+        Stream.filter(adapter.streamEvents, isMcpBridgeUnavailableWarning),
+      ).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+
+      yield* adapter.startSession({
+        provider: PI,
+        threadId,
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      const warning = yield* Fiber.join(warningFiber);
+
+      expect(warning._tag).toBe("Some");
+      if (warning._tag === "Some" && warning.value.type === "runtime.warning") {
+        expect(warning.value.payload.message).toMatch(/pi install npm:pi-mcp-adapter/);
+        expect(warning.value.payload.detail).toMatchObject({
+          code: "pi_mcp_bridge_unavailable",
+          reason: "adapter-not-installed",
+        });
+      }
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 

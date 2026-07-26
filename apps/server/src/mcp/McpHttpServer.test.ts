@@ -51,6 +51,24 @@ it("normalizes empty successful notification responses to accepted", () => {
   expect(resultResponse.status).toBe(200);
 });
 
+it("preserves the request id when declining modern MCP discovery", () => {
+  expect(
+    McpHttpServer.makeLegacyMcpDiscoveryResponse({
+      jsonrpc: "2.0",
+      id: 42,
+      method: "server/discover",
+    }),
+  ).toEqual({
+    jsonrpc: "2.0",
+    id: 42,
+    error: {
+      code: -32601,
+      message: "Method not found",
+    },
+  });
+  expect(McpHttpServer.makeLegacyMcpDiscoveryResponse({ id: {} }).id).toBeNull();
+});
+
 it.effect("returns bounded structural preview snapshot failures", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -146,6 +164,23 @@ it.effect("terminates HTTP MCP sessions with DELETE", () =>
         ),
       });
       expect(reusedSessionResponse.status).toBe(404);
+    }),
+  ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+);
+
+it.effect("rejects the optional MCP GET stream instead of falling through to the web app", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      yield* HttpRouter.serve(McpHttpServer.McpGetNotSupportedRouteLive, {
+        disableListenLog: true,
+        disableLogger: true,
+      }).pipe(Layer.build);
+      const response = yield* (yield* HttpClient.HttpClient).get("/mcp", {
+        headers: { accept: "text/event-stream" },
+      });
+
+      expect(response.status).toBe(405);
+      expect(response.headers.allow).toBe("POST, DELETE");
     }),
   ).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );

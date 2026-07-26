@@ -191,6 +191,7 @@ export interface PiRpcRuntimeOptions {
   readonly trustProjectResources?: boolean;
   readonly resumeCursor?: PiRpcResumeCursor;
   readonly extensionPath?: string;
+  readonly mcpConfigPath?: string;
   readonly noSession?: boolean;
   readonly noTools?: boolean;
   readonly disableResources?: boolean;
@@ -260,6 +261,7 @@ const RESERVED_LONG_FLAGS = new Set([
   "fork",
   "session-dir",
   "no-session",
+  "mcp-config",
 ]);
 const RESERVED_SHORT_FLAGS = new Set(["-p", "-a", "-na", "-r", "-c"]);
 
@@ -366,6 +368,7 @@ export function buildPiManagedArgs(options: PiRpcRuntimeOptions): ReadonlyArray<
         ]
       : []),
     ...(options.extensionPath ? ["--extension", options.extensionPath] : []),
+    ...(options.mcpConfigPath ? ["--mcp-config", options.mcpConfigPath] : []),
     ...(options.resumeCursor ? ["--session", options.resumeCursor.sessionFile] : []),
   ];
 }

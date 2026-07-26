@@ -25,6 +25,7 @@ import {
   type PiRpcState,
   supportedThinkingLevels,
 } from "../pi/PiRpcSessionRuntime.ts";
+import type { PiMcpBridgeCapability } from "../pi/PiMcpBridge.ts";
 
 const PROVIDER = ProviderDriverKind.make("piAgent");
 const VERSION_TIMEOUT_MS = 4_000;
@@ -157,6 +158,7 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
   settings: PiSettings,
   cwd: string,
   environment?: NodeJS.ProcessEnv,
+  mcpBridge?: PiMcpBridgeCapability,
 ): Effect.fn.Return<
   ServerProviderDraft,
   never,
@@ -261,13 +263,21 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
     models: catalog,
     probe:
       models.length > 0
-        ? {
-            installed: true,
-            version,
-            status: "ready",
-            auth: { status: "authenticated" },
-            message: `Pi Agent ${version} is ready.`,
-          }
+        ? mcpBridge && !mcpBridge.available
+          ? {
+              installed: true,
+              version,
+              status: "warning",
+              auth: { status: "authenticated" },
+              message: mcpBridge.message,
+            }
+          : {
+              installed: true,
+              version,
+              status: "ready",
+              auth: { status: "authenticated" },
+              message: `Pi Agent ${version} is ready.`,
+            }
         : {
             installed: true,
             version,

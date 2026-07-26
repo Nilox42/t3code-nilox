@@ -34,6 +34,7 @@ import {
   makeProviderSnapshotSettingsSource,
   type ProviderSnapshotSettings,
 } from "../providerUpdateSettings.ts";
+import { preparePiMcpBridge } from "../pi/PiMcpBridge.ts";
 
 const DRIVER_KIND = ProviderDriverKind.make("piAgent");
 const REFRESH_INTERVAL = Duration.minutes(5);
@@ -96,10 +97,17 @@ export const PiDriver: ProviderDriver<PiSettings, PiDriverEnv> = {
             }),
         ),
       );
+      const mcpBridge = yield* preparePiMcpBridge({
+        stateDir: serverConfig.stateDir,
+        instanceId,
+        settings: effectiveConfig,
+        environment: processEnvironment,
+      });
       const adapter = yield* makePiAdapter(effectiveConfig, {
         instanceId,
         environment: processEnvironment,
         extensionPath,
+        mcpBridge,
       });
       const textGeneration = yield* makePiTextGeneration(effectiveConfig, processEnvironment);
       const maintenanceCapabilities = yield* resolveProviderMaintenanceCapabilitiesEffect(UPDATE, {
@@ -117,6 +125,7 @@ export const PiDriver: ProviderDriver<PiSettings, PiDriverEnv> = {
         effectiveConfig,
         serverConfig.cwd,
         processEnvironment,
+        mcpBridge,
       ).pipe(
         Effect.map(stampIdentity),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),

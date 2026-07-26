@@ -21,8 +21,12 @@ type ToolCallHandler = (
     };
   },
 ) => Promise<{ readonly block: true; readonly reason: string } | undefined>;
+type BeforeAgentStartHandler = (event: {
+  readonly systemPrompt: string;
+}) => Promise<{ readonly systemPrompt: string } | undefined>;
 
 const originalMode = process.env.T3_PI_RUNTIME_MODE;
+const originalMcpBridgeEnabled = process.env.T3_PI_MCP_BRIDGE_ENABLED;
 
 afterEach(() => {
   if (originalMode === undefined) {
@@ -30,29 +34,48 @@ afterEach(() => {
   } else {
     process.env.T3_PI_RUNTIME_MODE = originalMode;
   }
+  if (originalMcpBridgeEnabled === undefined) {
+    delete process.env.T3_PI_MCP_BRIDGE_ENABLED;
+  } else {
+    process.env.T3_PI_MCP_BRIDGE_ENABLED = originalMcpBridgeEnabled;
+  }
 });
 
-async function loadBridge(): Promise<ToolCallHandler> {
-  let handler: ToolCallHandler | undefined;
+async function loadBridge(): Promise<{
+  readonly toolCall: ToolCallHandler;
+  readonly beforeAgentStart: BeforeAgentStartHandler;
+}> {
+  let toolCall: ToolCallHandler | undefined;
+  let beforeAgentStart: BeforeAgentStartHandler | undefined;
   const sourceUrl = `data:text/javascript;base64,${NodeBuffer.Buffer.from(PI_PERMISSION_BRIDGE_SOURCE).toString("base64")}`;
   const bridge = (await import(sourceUrl)) as {
     readonly default: (pi: {
-      readonly on: (event: "tool_call", callback: ToolCallHandler) => void;
+      readonly on: (
+        event: "tool_call" | "before_agent_start",
+        callback: ToolCallHandler | BeforeAgentStartHandler,
+      ) => void;
     }) => void;
   };
   bridge.default({
-    on: (_event, callback) => {
-      handler = callback;
+    on: (event, callback) => {
+      if (event === "tool_call") {
+        toolCall = callback as ToolCallHandler;
+      } else {
+        beforeAgentStart = callback as BeforeAgentStartHandler;
+      }
     },
   });
-  if (!handler) throw new Error("Pi permission bridge did not register tool_call.");
-  return handler;
+  if (!toolCall) throw new Error("Pi permission bridge did not register tool_call.");
+  if (!beforeAgentStart) {
+    throw new Error("Pi permission bridge did not register before_agent_start.");
+  }
+  return { toolCall, beforeAgentStart };
 }
 
 describe("Pi permission bridge extension", () => {
   it("caches accepted tool categories for the Pi process", async () => {
     process.env.T3_PI_RUNTIME_MODE = "approval-required";
-    const handler = await loadBridge();
+    const { toolCall: handler } = await loadBridge();
     let prompts = 0;
     const context = {
       ui: {
@@ -74,7 +97,7 @@ describe("Pi permission bridge extension", () => {
   });
 
   it("allows safe categories by policy and blocks decline or cancellation", async () => {
-    const handler = await loadBridge();
+    const { toolCall: handler } = await loadBridge();
     let choice: string | undefined = "Decline";
     let prompts = 0;
     const context = {
@@ -108,5 +131,17 @@ describe("Pi permission bridge extension", () => {
     expect(
       await handler({ toolCallId: "bash-1", toolName: "bash", input: { command: "pwd" } }, context),
     ).toEqual({ block: true, reason: "Cancelled by user" });
+  });
+
+  it("adds T3 preview guidance only when the MCP bridge is enabled", async () => {
+    const { beforeAgentStart } = await loadBridge();
+
+    expect(await beforeAgentStart({ systemPrompt: "Base prompt" })).toBeUndefined();
+    process.env.T3_PI_MCP_BRIDGE_ENABLED = "1";
+    const result = await beforeAgentStart({ systemPrompt: "Base prompt" });
+
+    expect(result?.systemPrompt).toContain("t3_code_preview_status");
+    expect(result?.systemPrompt).toContain("t3_code_preview_open");
+    expect(result?.systemPrompt).toContain("Base prompt");
   });
 });

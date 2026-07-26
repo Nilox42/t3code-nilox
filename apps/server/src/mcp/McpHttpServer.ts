@@ -51,6 +51,31 @@ type McpAuthMiddleware = (
   HttpServerRequest.HttpServerRequest
 >;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function makeLegacyMcpDiscoveryResponse(payload: unknown): {
+  readonly jsonrpc: "2.0";
+  readonly id: string | number | null;
+  readonly error: {
+    readonly code: -32601;
+    readonly message: "Method not found";
+  };
+} {
+  const candidateId = isRecord(payload) ? payload.id : undefined;
+  const id =
+    typeof candidateId === "string" || typeof candidateId === "number" ? candidateId : null;
+  return {
+    jsonrpc: "2.0",
+    id,
+    error: {
+      code: -32601,
+      message: "Method not found",
+    },
+  };
+}
+
 export const normalizeMcpHttpResponse = (
   response: HttpServerResponse.HttpServerResponse,
 ): HttpServerResponse.HttpServerResponse => {
@@ -75,6 +100,13 @@ const makeMcpAuthMiddleware = McpSessionRegistry.McpSessionRegistry.pipe(
             : "";
         const invocation = yield* registry.resolve(token);
         if (!invocation) return unauthorized;
+        if (
+          request.method === "POST" &&
+          request.headers["mcp-method"]?.toLowerCase() === "server/discover"
+        ) {
+          const payload = yield* request.json.pipe(Effect.orElseSucceed(() => null));
+          return HttpServerResponse.jsonUnsafe(makeLegacyMcpDiscoveryResponse(payload));
+        }
         return yield* httpEffect.pipe(
           Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
           Effect.map(normalizeMcpHttpResponse),
@@ -214,4 +246,23 @@ const McpTransportLive = McpServer.layerHttp({
   path: "/mcp",
 }).pipe(Layer.provide(McpAuthMiddlewareLive));
 
-export const layer = PreviewToolkitRegistrationLive.pipe(Layer.provideMerge(McpTransportLive));
+/**
+ * Streamable HTTP clients probe the MCP endpoint with GET to open an optional
+ * server-to-client SSE stream. T3 currently has no standalone SSE stream, so
+ * the MCP specification requires a 405 response. Without this exact route,
+ * the web-app catch-all redirects GET /mcp to Vite or index.html and clients
+ * incorrectly downgrade to the legacy SSE transport.
+ */
+export const McpGetNotSupportedRouteLive = HttpRouter.add(
+  "GET",
+  "/mcp",
+  HttpServerResponse.empty({
+    status: 405,
+    headers: { allow: "POST, DELETE" },
+  }),
+);
+
+export const layer = Layer.merge(
+  PreviewToolkitRegistrationLive.pipe(Layer.provideMerge(McpTransportLive)),
+  McpGetNotSupportedRouteLive,
+);

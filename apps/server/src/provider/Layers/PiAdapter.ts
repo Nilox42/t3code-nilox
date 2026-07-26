@@ -31,6 +31,7 @@ import * as SynchronizedRef from "effect/SynchronizedRef";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import {
   ProviderAdapterProcessError,
   ProviderAdapterRequestError,
@@ -39,6 +40,12 @@ import {
   ProviderAdapterValidationError,
   type ProviderAdapterError,
 } from "../Errors.ts";
+import {
+  PI_MCP_BEARER_TOKEN_ENV,
+  PI_MCP_BRIDGE_ENABLED_ENV,
+  PI_MCP_ENDPOINT_ENV,
+  type PiMcpBridgeCapability,
+} from "../pi/PiMcpBridge.ts";
 import { PI_PERMISSION_BRIDGE_MARKER } from "../pi/PiPermissionBridge.ts";
 import {
   clampPiThinkingLevel,
@@ -122,6 +129,7 @@ export interface PiAdapterOptions {
   readonly instanceId?: ProviderInstanceId;
   readonly environment?: NodeJS.ProcessEnv;
   readonly extensionPath: string;
+  readonly mcpBridge: PiMcpBridgeCapability;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -905,18 +913,31 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
           const sessionScope = yield* Scope.make("sequential");
 
           const cwd = path.resolve(input.cwd.trim());
+          const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
+          const mcpBridgeEnabled = mcpSession !== undefined && options.mcpBridge.available;
           const runtime = yield* makePiRpcSessionRuntime({
             binaryPath: settings.binaryPath || "pi",
             cwd,
             environment: {
               ...options.environment,
               T3_PI_RUNTIME_MODE: input.runtimeMode,
+              ...(mcpBridgeEnabled
+                ? {
+                    [PI_MCP_ENDPOINT_ENV]: mcpSession.endpoint,
+                    [PI_MCP_BEARER_TOKEN_ENV]: mcpSession.authorizationHeader.replace(
+                      /^Bearer\s+/i,
+                      "",
+                    ),
+                    [PI_MCP_BRIDGE_ENABLED_ENV]: "1",
+                  }
+                : {}),
             },
             agentDir: settings.agentDir,
             launchArgs: settings.launchArgs,
             trustProjectResources: settings.trustProjectResources,
             ...(resumeCursor ? { resumeCursor } : {}),
             extensionPath: options.extensionPath,
+            ...(mcpBridgeEnabled ? { mcpConfigPath: options.mcpBridge.configPath } : {}),
           }).pipe(
             Effect.provideService(Scope.Scope, sessionScope),
             Effect.mapError(
@@ -1046,6 +1067,20 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
                 message:
                   "Pi Agent has no native automatic permission classifier; Auto mode requests approval for every tool.",
                 detail: { code: "pi_auto_requires_approval" },
+              },
+            });
+          }
+          if (mcpSession && !options.mcpBridge.available) {
+            yield* offer({
+              type: "runtime.warning",
+              ...(yield* stamp),
+              ...baseEvent(ctx),
+              payload: {
+                message: options.mcpBridge.message,
+                detail: {
+                  code: "pi_mcp_bridge_unavailable",
+                  reason: options.mcpBridge.reason,
+                },
               },
             });
           }

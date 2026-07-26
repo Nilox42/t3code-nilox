@@ -7,6 +7,7 @@ import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 
 import { buildPiModelCatalog, checkPiProviderStatus } from "./PiProvider.ts";
+import type { PiMcpBridgeCapability } from "../pi/PiMcpBridge.ts";
 import type { PiModel, PiRpcState } from "../pi/PiRpcSessionRuntime.ts";
 
 const decodeSettings = Schema.decodeSync(PiSettings);
@@ -16,13 +17,18 @@ const mockBinaryPath = Effect.gen(function* () {
   return yield* path.fromFileUrl(new URL("../../../scripts/pi-mock-agent.mjs", import.meta.url));
 });
 
-const runStatus = (environment: NodeJS.ProcessEnv = {}, binaryPath?: string) =>
+const runStatus = (
+  environment: NodeJS.ProcessEnv = {},
+  binaryPath?: string,
+  mcpBridge?: PiMcpBridgeCapability,
+) =>
   Effect.gen(function* () {
     const resolvedBinary = binaryPath ?? (yield* mockBinaryPath);
     return yield* checkPiProviderStatus(
       decodeSettings({ binaryPath: resolvedBinary }),
       process.cwd(),
       { ...process.env, ...environment },
+      mcpBridge,
     );
   }).pipe(Effect.provide(NodeServices.layer), TestClock.withLive);
 
@@ -106,6 +112,21 @@ describe("Pi Agent provider probe", () => {
       expect(provider.auth.status).toBe("unauthenticated");
       expect(provider.status).toBe("warning");
       expect(provider.message).toMatch(/\/login/);
+    }),
+  );
+
+  it.effect("warns authenticated users when Pi lacks the browser MCP capability", () =>
+    Effect.gen(function* () {
+      const provider = yield* runStatus({}, undefined, {
+        available: false,
+        reason: "adapter-not-installed",
+        message: "Install the Pi MCP adapter, then restart T3 Code.",
+      });
+
+      expect(provider.auth.status).toBe("authenticated");
+      expect(provider.status).toBe("warning");
+      expect(provider.message).toMatch(/MCP adapter/);
+      expect(provider.models).not.toHaveLength(0);
     }),
   );
 

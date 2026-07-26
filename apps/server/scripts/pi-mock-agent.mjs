@@ -209,7 +209,18 @@ function emitUiRequest() {
 
 function logRequest(request) {
   if (!env.T3_PI_MOCK_REQUEST_LOG) return;
-  NodeFS.appendFileSync(env.T3_PI_MOCK_REQUEST_LOG, `${JSON.stringify({ args, request })}\n`);
+  NodeFS.appendFileSync(
+    env.T3_PI_MOCK_REQUEST_LOG,
+    `${JSON.stringify({
+      args,
+      environment: {
+        mcpEndpoint: env.T3_MCP_ENDPOINT,
+        hasMcpBearerToken: Boolean(env.T3_MCP_BEARER_TOKEN),
+        mcpBridgeEnabled: env.T3_PI_MCP_BRIDGE_ENABLED,
+      },
+      request,
+    })}\n`,
+  );
 }
 
 const input = NodeReadline.createInterface({ input: process.stdin, crlfDelay: Infinity });

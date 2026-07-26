@@ -95,6 +95,7 @@ describe("Pi RPC protocol helpers", () => {
       "-na",
       "--session old.jsonl",
       "--no-session",
+      "--mcp-config /tmp/other.json",
     ]) {
       expect(() => validatePiLaunchArgs(args)).toThrow(/managed by T3 Code/i);
     }
@@ -104,6 +105,13 @@ describe("Pi RPC protocol helpers", () => {
       "rpc",
       "--no-approve",
     ]);
+    expect(
+      buildPiManagedArgs({
+        binaryPath: "pi",
+        cwd: "/tmp",
+        mcpConfigPath: "/tmp/t3-mcp.json",
+      }),
+    ).toEqual(["--mode", "rpc", "--no-approve", "--mcp-config", "/tmp/t3-mcp.json"]);
   });
 });
 
