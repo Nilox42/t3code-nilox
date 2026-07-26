@@ -22,6 +22,7 @@ import {
   issueRemotePairingToken,
   launchOrReuseRemoteServer,
   REMOTE_PICK_PORT_SCRIPT,
+  resolveRemoteHomeDirName,
   SshEnvironmentManager,
   waitForHttpReady,
 } from "./tunnel.ts";
@@ -224,6 +225,51 @@ describe("ssh tunnel scripts", () => {
       buildRemoteLaunchScript().indexOf('DEFAULT_RUNTIME_INFO="$(resolve_default_runtime_port'),
       buildRemoteLaunchScript().indexOf('elif [ -n "$REMOTE_PID" ]'),
     );
+  });
+
+  it("isolates every Nilox remote script under the Nilox home", () => {
+    const target = {
+      alias: "devbox",
+      hostname: "devbox.example.com",
+      username: "nilox",
+      port: 22,
+    } as const;
+    const runner = { remoteHomeDirName: ".t3-nilox" };
+    const scripts = [
+      buildRemoteLaunchScript(runner),
+      buildRemotePairingScript(target, runner),
+      buildRemoteStopScript(target, runner),
+    ];
+
+    for (const script of scripts) {
+      assert.include(script, 'DEFAULT_SERVER_HOME="$HOME/.t3-nilox"');
+      assert.include(script, 'STATE_DIR="$DEFAULT_SERVER_HOME/ssh-launch/');
+      assert.notInclude(script, 'DEFAULT_SERVER_HOME="$HOME/.t3"');
+      assert.notInclude(script, 'STATE_DIR="$HOME/.t3/ssh-launch/');
+    }
+    assert.include(
+      scripts[0]!,
+      'DEFAULT_RUNTIME_FILE="$DEFAULT_SERVER_HOME/userdata/server-runtime.json"',
+    );
+    assert.include(scripts[0]!, '--base-dir "$DEFAULT_SERVER_HOME"');
+    assert.include(scripts[1]!, '--base-dir "$PAIRING_BASE_DIR"');
+  });
+
+  it("defaults remote state to .t3 and rejects shell injection", () => {
+    assert.equal(resolveRemoteHomeDirName(), ".t3");
+    assert.include(buildRemoteLaunchScript(), 'DEFAULT_SERVER_HOME="$HOME/.t3"');
+    for (const remoteHomeDirName of [
+      "../.t3-nilox",
+      ".t3-nilox; touch /tmp/owned",
+      ".t3-nilox/other",
+      "$(touch /tmp/owned)",
+      "t3-nilox",
+    ]) {
+      assert.throws(
+        () => buildRemoteLaunchScript({ remoteHomeDirName }),
+        /Invalid remoteHomeDirName/,
+      );
+    }
   });
 
   it.effect("accepts launch JSON after remote shell startup noise", () => {

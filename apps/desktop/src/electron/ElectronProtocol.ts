@@ -8,20 +8,34 @@ import * as Scope from "effect/Scope";
 
 import * as Electron from "electron";
 
+import {
+  OFFICIAL_DESKTOP_DISTRIBUTION,
+  type DesktopDistribution,
+} from "@t3tools/shared/desktopDistribution";
+
 export const DESKTOP_HOST = "app";
 export const DESKTOP_PRODUCTION_SCHEME = "t3code";
 export const DESKTOP_DEVELOPMENT_SCHEME = "t3code-dev";
 
-export function getDesktopScheme(isDevelopment: boolean): string {
-  return isDevelopment ? DESKTOP_DEVELOPMENT_SCHEME : DESKTOP_PRODUCTION_SCHEME;
+export function getDesktopScheme(
+  isDevelopment: boolean,
+  distribution: DesktopDistribution = OFFICIAL_DESKTOP_DISTRIBUTION,
+): string {
+  return isDevelopment ? distribution.developmentScheme : distribution.productionScheme;
 }
 
-export function getDesktopOrigin(isDevelopment: boolean): string {
-  return `${getDesktopScheme(isDevelopment)}://${DESKTOP_HOST}`;
+export function getDesktopOrigin(
+  isDevelopment: boolean,
+  distribution: DesktopDistribution = OFFICIAL_DESKTOP_DISTRIBUTION,
+): string {
+  return `${getDesktopScheme(isDevelopment, distribution)}://${DESKTOP_HOST}`;
 }
 
-export function getDesktopUrl(isDevelopment: boolean): string {
-  return `${getDesktopOrigin(isDevelopment)}/`;
+export function getDesktopUrl(
+  isDevelopment: boolean,
+  distribution: DesktopDistribution = OFFICIAL_DESKTOP_DISTRIBUTION,
+): string {
+  return `${getDesktopOrigin(isDevelopment, distribution)}/`;
 }
 
 export class ElectronProtocolRegistrationError extends Schema.TaggedErrorClass<ElectronProtocolRegistrationError>()(

@@ -13,6 +13,7 @@ import * as DesktopAppIdentity from "./DesktopAppIdentity.ts";
 import * as DesktopAssets from "./DesktopAssets.ts";
 import * as DesktopConfig from "./DesktopConfig.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
+import { NILOX_DESKTOP_DISTRIBUTION } from "@t3tools/shared/desktopDistribution";
 
 const defaultEnvironmentInput = {
   dirname: "/repo/apps/desktop/dist-electron",
@@ -177,6 +178,50 @@ describe("DesktopAppIdentity", () => {
         );
       }),
       { legacyPathProbeError: cause },
+    );
+  });
+
+  it.effect("never probes the official legacy path for Nilox", () => {
+    const cause = PlatformError.systemError({
+      _tag: "PermissionDenied",
+      module: "FileSystem",
+      method: "exists",
+      description: "official path must not be probed",
+      pathOrDescriptor: "/Users/alice/Library/Application Support/T3 Code (Alpha)",
+    });
+
+    return withIdentity(
+      Effect.gen(function* () {
+        const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
+        assert.equal(
+          yield* identity.resolveUserDataPath,
+          "/Users/alice/Library/Application Support/t3code-nilox",
+        );
+      }),
+      {
+        environment: { distribution: NILOX_DESKTOP_DISTRIBUTION },
+        legacyPathProbeError: cause,
+      },
+    );
+  });
+
+  it.effect("configures Nilox window and About branding", () => {
+    const calls: ElectronAppCalls = {
+      setAboutPanelOptions: [],
+      setDockIcon: [],
+      setName: [],
+    };
+    return withIdentity(
+      Effect.gen(function* () {
+        const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
+        yield* identity.configure;
+        assert.deepEqual(calls.setName, ["T3 Code Nilox (Alpha)"]);
+        assert.equal(calls.setAboutPanelOptions[0]?.applicationName, "T3 Code Nilox (Alpha)");
+      }),
+      {
+        calls,
+        environment: { distribution: NILOX_DESKTOP_DISTRIBUTION },
+      },
     );
   });
 

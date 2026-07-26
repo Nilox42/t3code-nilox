@@ -107,6 +107,7 @@ const handleFatalStartupError = Effect.fn("desktop.startup.handleFatalStartupErr
   never,
   | DesktopShutdown.DesktopShutdown
   | DesktopState.DesktopState
+  | DesktopEnvironment.DesktopEnvironment
   | ElectronApp.ElectronApp
   | ElectronDialog.ElectronDialog
 > {
@@ -114,6 +115,7 @@ const handleFatalStartupError = Effect.fn("desktop.startup.handleFatalStartupErr
   const state = yield* DesktopState.DesktopState;
   const electronApp = yield* ElectronApp.ElectronApp;
   const electronDialog = yield* ElectronDialog.ElectronDialog;
+  const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const message = error instanceof Error ? error.message : String(error);
   const detail =
     error instanceof Error && typeof error.stack === "string" ? `\n${error.stack}` : "";
@@ -125,7 +127,7 @@ const handleFatalStartupError = Effect.fn("desktop.startup.handleFatalStartupErr
   const wasQuitting = yield* Ref.getAndSet(state.quitting, true);
   if (!wasQuitting) {
     yield* electronDialog.showErrorBox(
-      "T3 Code failed to start",
+      `${environment.distribution.baseName} failed to start`,
       `Stage: ${stage}\n${message}${detail}`,
     );
   }
@@ -176,7 +178,7 @@ const bootstrap = Effect.gen(function* () {
     ? Option.getOrThrow(environment.devServerUrl)
     : backendConfig.httpBaseUrl;
   yield* electronProtocol.registerDesktopProtocol({
-    scheme: ElectronProtocol.getDesktopScheme(environment.isDevelopment),
+    scheme: ElectronProtocol.getDesktopScheme(environment.isDevelopment, environment.distribution),
     targetOrigin: rendererTarget,
     backendOrigin: backendConfig.httpBaseUrl,
     clerkFrontendApiHostname: DesktopClerk.desktopClerkFrontendApiHostname,

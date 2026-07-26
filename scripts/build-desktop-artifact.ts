@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import * as NodeModule from "node:module";
+import sharp from "sharp";
 
 import { fromYaml } from "@t3tools/shared/schemaYaml";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
@@ -9,6 +10,11 @@ import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import rootPackageJson from "../package.json" with { type: "json" };
 import desktopPackageJson from "../apps/desktop/package.json" with { type: "json" };
 import serverPackageJson from "../apps/server/package.json" with { type: "json" };
+import {
+  OFFICIAL_DESKTOP_DISTRIBUTION,
+  resolveDesktopDistribution,
+  type DesktopDistribution,
+} from "@t3tools/shared/desktopDistribution";
 
 import { applyWebBrandAssets } from "./apply-web-brand-assets.ts";
 import {
@@ -35,7 +41,6 @@ import { Command, Flag } from "effect/unstable/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 const LINUX_ICON_SIZES = [16, 22, 24, 32, 48, 64, 128, 256, 512] as const;
-const DESKTOP_APP_ID = "com.t3tools.t3code";
 const APPLE_TEAM_ID_PATTERN = /^[A-Z0-9]{10}$/u;
 
 const BuildPlatform = Schema.Literals(["mac", "linux", "win"]);
@@ -566,6 +571,7 @@ interface StagePackageJson {
   readonly version: string;
   readonly buildVersion: string;
   readonly t3codeCommitHash: string;
+  readonly t3codeDesktopIdentity?: string;
   readonly private: true;
   readonly packageManager: string;
   readonly description: string;
@@ -717,6 +723,7 @@ function normalizePasskeyRpDomain(value: string): string {
 
 export function resolveMacPasskeySigningConfiguration(
   env: Readonly<Record<string, string | undefined>>,
+  distribution: DesktopDistribution = OFFICIAL_DESKTOP_DISTRIBUTION,
 ): MacPasskeySigningConfiguration {
   const teamId = env.T3CODE_APPLE_TEAM_ID?.trim().toUpperCase() ?? "";
   if (!APPLE_TEAM_ID_PATTERN.test(teamId)) {
@@ -752,7 +759,7 @@ export function resolveMacPasskeySigningConfiguration(
   }
 
   return {
-    appId: DESKTOP_APP_ID,
+    appId: distribution.appId,
     teamId,
     rpDomains: uniqueRpDomains,
     provisioningProfilePath,
@@ -1210,19 +1217,26 @@ export function stageLinuxIconSize(
   return resize("magick").pipe(
     Effect.catch((primaryCause) =>
       resize("convert").pipe(
-        Effect.mapError(
-          (fallbackCause) =>
-            new LinuxIconResizeError({
-              operation: "resize",
-              iconSize,
-              primaryTool: "magick",
-              fallbackTool: "convert",
-              cause: new AggregateError(
-                [primaryCause, fallbackCause],
-                "Both Linux icon resize tool attempts failed.",
-                { cause: primaryCause },
-              ),
-            }),
+        Effect.catch((fallbackCause) =>
+          Effect.tryPromise({
+            try: () =>
+              sharp(sourcePng)
+                .resize(iconSize, iconSize, { kernel: sharp.kernel.lanczos3 })
+                .png()
+                .toFile(targetPng),
+            catch: () =>
+              new LinuxIconResizeError({
+                operation: "resize",
+                iconSize,
+                primaryTool: "magick",
+                fallbackTool: "convert",
+                cause: new AggregateError(
+                  [primaryCause, fallbackCause],
+                  "Both Linux icon resize tool attempts failed.",
+                  { cause: primaryCause },
+                ),
+              }),
+          }).pipe(Effect.asVoid),
         ),
       ),
     ),
@@ -1301,6 +1315,7 @@ export function resolveDesktopRuntimeDependencies(
 
 export const resolveGitHubPublishConfig = Effect.fn("resolveGitHubPublishConfig")(function* (
   updateChannel: "latest" | "nightly",
+  distribution: DesktopDistribution = OFFICIAL_DESKTOP_DISTRIBUTION,
 ) {
   const env = yield* Config.all({
     updateRepository: Config.string("T3CODE_DESKTOP_UPDATE_REPOSITORY").pipe(Config.option),
@@ -1309,6 +1324,7 @@ export const resolveGitHubPublishConfig = Effect.fn("resolveGitHubPublishConfig"
   const rawRepo = (
     Option.getOrUndefined(env.updateRepository)?.trim() ||
     Option.getOrUndefined(env.githubRepository)?.trim() ||
+    distribution.releaseRepository ||
     ""
   ).trim();
   if (!rawRepo) return undefined;
@@ -1329,11 +1345,25 @@ export function resolveDesktopUpdateChannel(version: string): "latest" | "nightl
   return /-nightly\.\d{8}\.\d+$/.test(version) ? "nightly" : "latest";
 }
 
-export function resolveDesktopWebAssetBrand(version: string): WebAssetBrand {
+export function resolveDesktopWebAssetBrand(
+  version: string,
+  distribution: DesktopDistribution = OFFICIAL_DESKTOP_DISTRIBUTION,
+): WebAssetBrand {
+  if (distribution.id === "nilox") return "nilox";
   return resolveWebAssetBrandForChannel(resolveDesktopUpdateChannel(version));
 }
 
-export function resolveDesktopBuildIconAssets(version: string): DesktopBuildIconAssets {
+export function resolveDesktopBuildIconAssets(
+  version: string,
+  distribution: DesktopDistribution = OFFICIAL_DESKTOP_DISTRIBUTION,
+): DesktopBuildIconAssets {
+  if (distribution.id === "nilox") {
+    return {
+      macIconPng: BRAND_ASSET_PATHS.niloxMacIconPng,
+      linuxIconPng: BRAND_ASSET_PATHS.niloxLinuxIconPng,
+      windowsIconIco: BRAND_ASSET_PATHS.niloxWindowsIconIco,
+    };
+  }
   if (resolveDesktopUpdateChannel(version) === "nightly") {
     return {
       macIconPng: BRAND_ASSET_PATHS.nightlyMacIconPng,
@@ -1366,10 +1396,15 @@ export function resolvePackageManagerUserAgent(packageManager: string): string {
   return `${trimmed.slice(0, versionSeparator)}/${trimmed.slice(versionSeparator + 1)}`;
 }
 
-export function resolveDesktopProductName(version: string): string {
+export function resolveDesktopProductName(
+  version: string,
+  distribution: DesktopDistribution = OFFICIAL_DESKTOP_DISTRIBUTION,
+): string {
   return resolveDesktopUpdateChannel(version) === "nightly"
-    ? "T3 Code (Nightly)"
-    : (desktopPackageJson.productName ?? "T3 Code");
+    ? `${distribution.baseName} (Nightly)`
+    : distribution.id === "official"
+      ? (desktopPackageJson.productName ?? "T3 Code")
+      : distribution.productName;
 }
 
 export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
@@ -1385,11 +1420,12 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
         readonly provisioningProfilePath: string;
       }
     | undefined,
+  distribution: DesktopDistribution = OFFICIAL_DESKTOP_DISTRIBUTION,
 ) {
   const buildConfig: Record<string, unknown> = {
-    appId: DESKTOP_APP_ID,
-    productName: resolveDesktopProductName(version),
-    artifactName: "T3-Code-${version}-${arch}.${ext}",
+    appId: distribution.appId,
+    productName: resolveDesktopProductName(version, distribution),
+    artifactName: `${distribution.artifactBaseName}-\${version}-\${arch}.\${ext}`,
     directories: {
       buildResources: "apps/desktop/resources",
     },
@@ -1409,7 +1445,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     asarUnpack: [...DESKTOP_ASAR_UNPACK, "apps/server/dist/**", "**/node_modules/**"],
   };
   const updateChannel = resolveDesktopUpdateChannel(version);
-  const publishConfig = yield* resolveGitHubPublishConfig(updateChannel);
+  const publishConfig = yield* resolveGitHubPublishConfig(updateChannel, distribution);
   if (publishConfig) {
     buildConfig.publish = [publishConfig];
   } else if (mockUpdates) {
@@ -1428,8 +1464,8 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       category: "public.app-category.developer-tools",
       protocols: [
         {
-          name: "T3 Code",
-          schemes: ["t3code", "t3code-dev"],
+          name: distribution.baseName,
+          schemes: [distribution.productionScheme, distribution.developmentScheme],
         },
       ],
       ...(macPasskeySigning
@@ -1444,12 +1480,12 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   if (platform === "linux") {
     buildConfig.linux = {
       target: [target],
-      executableName: "t3code",
+      executableName: distribution.executableName,
       icon: "icons",
       category: "Development",
       desktop: {
         entry: {
-          StartupWMClass: "t3code",
+          StartupWMClass: distribution.linuxWmClass,
         },
       },
     };
@@ -1460,6 +1496,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     const winConfig: Record<string, unknown> = {
       target: [target],
       icon: "icon.ico",
+      executableName: distribution.executableName,
       // Resource editing applies the product metadata and icon independently
       // of code signing. Disabling it for local unsigned builds leaves the
       // packaged executable with Electron's stock icon.
@@ -1577,6 +1614,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const workspaceOverrides = workspaceConfig.overrides ?? {};
   const workspacePatchedDependencies = workspaceConfig.patchedDependencies ?? {};
   const workspaceAllowBuilds = workspaceConfig.allowBuilds ?? {};
+  const distribution = resolveDesktopDistribution(process.env.T3CODE_DESKTOP_IDENTITY);
 
   const platformConfig = PLATFORM_CONFIG[options.platform];
   if (!platformConfig) {
@@ -1624,7 +1662,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   });
 
   const appVersion = options.version ?? serverPackageJson.version;
-  const iconAssets = resolveDesktopBuildIconAssets(appVersion);
+  const iconAssets = resolveDesktopBuildIconAssets(appVersion, distribution);
   const commitHash = yield* resolveGitCommitHash(repoRoot);
   const mkdir = options.keepStage ? fs.makeTempDirectory : fs.makeTempDirectoryScoped;
   const stageRoot = yield* mkdir({
@@ -1674,7 +1712,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     });
   }
 
-  const webAssetBrand = resolveDesktopWebAssetBrand(appVersion);
+  const webAssetBrand = resolveDesktopWebAssetBrand(appVersion, distribution);
   yield* applyWebBrandAssets(webAssetBrand, "apps/server/dist/client");
   yield* Effect.log(`[desktop-artifact] Applied ${webAssetBrand} web client branding.`);
   yield* validateBundledClientAssets(path.dirname(bundledClientEntry));
@@ -1704,7 +1742,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const configuredMacPasskeySigning =
     options.platform === "mac" && options.signed
       ? yield* Effect.try({
-          try: () => resolveMacPasskeySigningConfiguration(loadRepoEnv({ repoRoot })),
+          try: () => resolveMacPasskeySigningConfiguration(loadRepoEnv({ repoRoot }), distribution),
           catch: MacPasskeySigningConfigurationResolutionError.fromCause,
         })
       : undefined;
@@ -1754,13 +1792,15 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     stageDependencies,
   );
   const stagePackageJson: StagePackageJson = {
-    name: "t3code",
+    name: distribution.id === "official" ? "t3code" : "t3code-nilox",
     version: appVersion,
     buildVersion: appVersion,
     t3codeCommitHash: commitHash,
+    ...(distribution.id === "nilox" ? { t3codeDesktopIdentity: distribution.id } : {}),
     private: true,
     packageManager: rootPackageJson.packageManager,
-    description: "T3 Code desktop build",
+    description:
+      distribution.id === "official" ? "T3 Code desktop build" : "T3 Code Nilox desktop build",
     author: "T3 Tools",
     main: "apps/desktop/dist-electron/main.cjs",
     build: yield* createBuildConfig(
@@ -1776,6 +1816,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
             provisioningProfilePath: macPasskeySigning.provisioningProfilePath,
           }
         : undefined,
+      distribution,
     ),
     dependencies: stageDependencies,
     devDependencies: {

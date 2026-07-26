@@ -1,9 +1,11 @@
 import { defineConfig } from "vite-plus";
 
 import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
+import { resolveDesktopDistribution } from "@t3tools/shared/desktopDistribution";
 
 const repoEnv = loadRepoEnv();
 const shouldLaunchElectronAfterPack = process.env.T3CODE_DESKTOP_DEV === "1";
+const desktopDistribution = resolveDesktopDistribution(process.env.T3CODE_DESKTOP_IDENTITY);
 const publicConfigDefine = {
   __T3CODE_BUILD_CLERK_PUBLISHABLE_KEY__: JSON.stringify(
     repoEnv.T3CODE_CLERK_PUBLISHABLE_KEY?.trim() ?? "",
@@ -11,6 +13,7 @@ const publicConfigDefine = {
   __T3CODE_BUILD_REMOTE_CLI_PACKAGE_SPEC__: JSON.stringify(
     repoEnv.T3CODE_REMOTE_CLI_PACKAGE_SPEC?.trim() ?? "",
   ),
+  __T3CODE_BUILD_DESKTOP_IDENTITY__: JSON.stringify(desktopDistribution.id),
 };
 
 export default defineConfig({

@@ -83,6 +83,27 @@ describe("brand-assets", () => {
     expect(resolveWebAssetBrandForPackageVersion("0.0.29-nightly.20260723.882")).toBe("nightly");
   });
 
+  it("maps Nilox web assets without changing official families", () => {
+    expect(resolveWebIconOverrides("nilox", "dist/client")).toEqual([
+      {
+        sourceRelativePath: BRAND_ASSET_PATHS.niloxWebFaviconIco,
+        targetRelativePath: "dist/client/favicon.ico",
+      },
+      {
+        sourceRelativePath: BRAND_ASSET_PATHS.niloxWebFavicon16Png,
+        targetRelativePath: "dist/client/favicon-16x16.png",
+      },
+      {
+        sourceRelativePath: BRAND_ASSET_PATHS.niloxWebFavicon32Png,
+        targetRelativePath: "dist/client/favicon-32x32.png",
+      },
+      {
+        sourceRelativePath: BRAND_ASSET_PATHS.niloxWebAppleTouchIconPng,
+        targetRelativePath: "dist/client/apple-touch-icon.png",
+      },
+    ]);
+  });
+
   it("keeps development, nightly, and production icon families separate", () => {
     expect([
       BRAND_ASSET_PATHS.developmentIconComposerProject,

@@ -6,6 +6,7 @@ import * as Option from "effect/Option";
 
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 import * as DesktopConfig from "./DesktopConfig.ts";
+import { NILOX_DESKTOP_DISTRIBUTION } from "@t3tools/shared/desktopDistribution";
 
 const defaultInput = {
   dirname: "/repo/apps/desktop/dist-electron",
@@ -108,6 +109,26 @@ describe("DesktopEnvironment", () => {
 
       assert.equal(development.stateDir, "/Users/alice/.t3/dev");
       assert.equal(production.stateDir, "/Users/alice/.t3/userdata");
+    }),
+  );
+
+  it.effect("isolates Nilox defaults while preserving explicit T3CODE_HOME", () =>
+    Effect.gen(function* () {
+      const nilox = yield* makeEnvironment({ distribution: NILOX_DESKTOP_DISTRIBUTION });
+      assert.equal(nilox.baseDir, "/Users/alice/.t3-nilox");
+      assert.equal(nilox.stateDir, "/Users/alice/.t3-nilox/userdata");
+      assert.equal(nilox.userDataDirName, "t3code-nilox");
+      assert.equal(nilox.legacyUserDataDirName, undefined);
+      assert.equal(nilox.displayName, "T3 Code Nilox (Alpha)");
+      assert.equal(nilox.appUserModelId, "io.github.nilox42.t3code.nilox");
+      assert.equal(nilox.linuxDesktopEntryName, "t3code-nilox.desktop");
+      assert.equal(nilox.linuxWmClass, "t3code-nilox");
+
+      const explicit = yield* makeEnvironment(
+        { distribution: NILOX_DESKTOP_DISTRIBUTION },
+        { T3CODE_HOME: "/tmp/custom-nilox" },
+      );
+      assert.equal(explicit.stateDir, "/tmp/custom-nilox/userdata");
     }),
   );
 

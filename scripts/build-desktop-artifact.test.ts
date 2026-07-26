@@ -39,6 +39,7 @@ import {
   STAGE_INSTALL_ARGS,
 } from "./build-desktop-artifact.ts";
 import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
+import { NILOX_DESKTOP_DISTRIBUTION } from "@t3tools/shared/desktopDistribution";
 import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 
 function mockProcess(exitCode: number) {
@@ -107,6 +108,51 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.equal(resolveDesktopWebAssetBrand("0.0.17"), "production");
     assert.equal(resolveDesktopWebAssetBrand("0.0.17-nightly.20260413.42"), "nightly");
   });
+
+  it.effect("builds a fully separate Nilox Electron identity", () =>
+    Effect.gen(function* () {
+      assert.equal(
+        resolveDesktopProductName("0.0.29-pi.2", NILOX_DESKTOP_DISTRIBUTION),
+        "T3 Code Nilox (Alpha)",
+      );
+      assert.equal(resolveDesktopWebAssetBrand("0.0.29-pi.2", NILOX_DESKTOP_DISTRIBUTION), "nilox");
+      assert.deepStrictEqual(
+        resolveDesktopBuildIconAssets("0.0.29-pi.2", NILOX_DESKTOP_DISTRIBUTION),
+        {
+          macIconPng: BRAND_ASSET_PATHS.niloxMacIconPng,
+          linuxIconPng: BRAND_ASSET_PATHS.niloxLinuxIconPng,
+          windowsIconIco: BRAND_ASSET_PATHS.niloxWindowsIconIco,
+        },
+      );
+
+      const config = yield* createBuildConfig(
+        "linux",
+        "AppImage",
+        "0.0.29-pi.2",
+        false,
+        false,
+        undefined,
+        undefined,
+        NILOX_DESKTOP_DISTRIBUTION,
+      );
+      const linux = config.linux as Record<string, unknown>;
+      assert.equal(config.appId, "io.github.nilox42.t3code.nilox");
+      assert.equal(config.productName, "T3 Code Nilox (Alpha)");
+      assert.equal(config.artifactName, "T3-Code-Nilox-${version}-${arch}.${ext}");
+      assert.deepStrictEqual(config.publish, [
+        {
+          provider: "github",
+          owner: "Nilox42",
+          repo: "t3code-nilox",
+          releaseType: "release",
+        },
+      ]);
+      assert.equal(linux.executableName, "t3code-nilox");
+      assert.deepStrictEqual(linux.desktop, {
+        entry: { StartupWMClass: "t3code-nilox" },
+      });
+    }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
+  );
 
   it.effect("resolves GitHub desktop publish config from Effect config", () =>
     Effect.gen(function* () {

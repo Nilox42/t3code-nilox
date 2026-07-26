@@ -23,6 +23,8 @@ jobs:
     name: Build AppImage and remote server
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    env:
+      T3CODE_DESKTOP_IDENTITY: nilox
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -83,6 +85,7 @@ jobs:
           vp run --filter t3 build
           node apps/server/scripts/cli.ts pack \
             --app-version "${{ steps.release.outputs.version }}" \
+            --desktop-identity nilox \
             --pack-destination release \
             --verbose
           test -f "release/${{ steps.release.outputs.server_asset }}"
@@ -110,18 +113,22 @@ jobs:
           )
 
           {
-            echo "## T3 Code Pi fork"
+            echo "## T3 Code Nilox"
             echo
             echo "This release contains a matching Linux desktop and remote server built from commit \`$GITHUB_SHA\`."
             echo
+            echo "T3 Code Nilox installs safely beside official T3 Code. It uses \`~/.config/t3code-nilox\` for Electron data, \`~/.t3-nilox\` for local T3 state, and \`~/.t3-nilox\` on SSH-managed remote hosts."
+            echo
+            echo "Pi authentication and Pi's global skills, extensions, prompts, and model configuration remain shared intentionally; only T3-owned state is isolated."
+            echo
             echo "### Assets"
             echo
-            echo "- \`T3-Code-${{ steps.release.outputs.version }}-x86_64.AppImage\`: Linux x64 desktop app"
+            echo "- \`T3-Code-Nilox-${{ steps.release.outputs.version }}-x86_64.AppImage\`: unsigned Linux x86_64 desktop app"
             echo "- \`${{ steps.release.outputs.server_asset }}\`: remote Linux server/CLI package"
             echo
             echo "The AppImage embeds the server asset URL, so its SSH environment flow starts this exact fork build on the remote host."
             echo
-            echo "The remote host needs Node.js \`^22.16 || ^23.11 || >=24.10\` and the Pi CLI installed."
+            echo "The remote host needs Node.js \`^22.16 || ^23.11 || >=24.10\` and the Pi CLI installed. This release is Linux x86_64 only and unsigned."
           } > release-notes.md
 
       - name: Upload workflow artifact
@@ -148,6 +155,6 @@ jobs:
             release/SHA256SUMS \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
-            --title "T3 Code Pi ${{ steps.release.outputs.version }}" \
+            --title "T3 Code Nilox ${{ steps.release.outputs.version }}" \
             --notes-file release-notes.md \
             --latest

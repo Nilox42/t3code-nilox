@@ -24,6 +24,7 @@ vi.mock("@clerk/electron/storage", () => ({
 
 import * as DesktopClerk from "./DesktopClerk.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
+import { NILOX_DESKTOP_DISTRIBUTION } from "@t3tools/shared/desktopDistribution";
 
 const makeDesktopClerkLayer = (isDevelopment = true) => {
   const environment = DesktopEnvironment.DesktopEnvironment.of({
@@ -145,5 +146,12 @@ describe("DesktopClerk", () => {
     ]);
     storageMock.mockClear();
     createClerkBridgeMock.mockClear();
+  });
+
+  it("configures the Nilox Clerk renderer origin", () => {
+    storageMock.mockReturnValue(storageAdapter);
+    createClerkBridgeMock.mockReturnValue({ cleanup: vi.fn() });
+    DesktopClerk.createDesktopClerkBridge("/tmp/t3-nilox", false, NILOX_DESKTOP_DISTRIBUTION);
+    assert.equal(createClerkBridgeMock.mock.calls[0]?.[0]?.renderer.scheme, "t3code-nilox");
   });
 });

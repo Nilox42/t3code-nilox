@@ -13,6 +13,15 @@ export const BRAND_ASSET_PATHS = {
   productionWebFavicon32Png: "assets/prod/t3-black-web-favicon-32x32.png",
   productionWebAppleTouchIconPng: "assets/prod/t3-black-web-apple-touch-180.png",
 
+  niloxSvgSource: "assets/nilox/t3-code-nilox.svg",
+  niloxMacIconPng: "assets/nilox/nilox-macos-1024.png",
+  niloxLinuxIconPng: "assets/nilox/nilox-universal-1024.png",
+  niloxWindowsIconIco: "assets/nilox/t3-nilox-windows.ico",
+  niloxWebFaviconIco: "assets/nilox/t3-nilox-web-favicon.ico",
+  niloxWebFavicon16Png: "assets/nilox/t3-nilox-web-favicon-16x16.png",
+  niloxWebFavicon32Png: "assets/nilox/t3-nilox-web-favicon-32x32.png",
+  niloxWebAppleTouchIconPng: "assets/nilox/t3-nilox-web-apple-touch-180.png",
+
   nightlyIconComposerProject: "assets/nightly/app-icon.icon",
   nightlyIosIconPng: "assets/nightly/nightly-ios-1024.png",
   nightlyMacIconPng: "assets/nightly/nightly-macos-1024.png",
@@ -31,7 +40,7 @@ export const BRAND_ASSET_PATHS = {
   developmentWebAppleTouchIconPng: "assets/dev/blueprint-web-apple-touch-180.png",
 } as const;
 
-export type WebAssetBrand = "development" | "nightly" | "production";
+export type WebAssetBrand = "development" | "nightly" | "production" | "nilox";
 
 export const WEB_ASSET_CHANNELS = ["latest", "nightly"] as const;
 
@@ -58,6 +67,12 @@ const WEB_ICON_TARGET_FILENAMES = {
 } as const;
 
 const WEB_ICON_SOURCE_PATHS_BY_BRAND = {
+  nilox: {
+    faviconIco: BRAND_ASSET_PATHS.niloxWebFaviconIco,
+    favicon16Png: BRAND_ASSET_PATHS.niloxWebFavicon16Png,
+    favicon32Png: BRAND_ASSET_PATHS.niloxWebFavicon32Png,
+    appleTouchIconPng: BRAND_ASSET_PATHS.niloxWebAppleTouchIconPng,
+  },
   development: {
     faviconIco: BRAND_ASSET_PATHS.developmentWebFaviconIco,
     favicon16Png: BRAND_ASSET_PATHS.developmentWebFavicon16Png,

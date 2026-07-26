@@ -15,12 +15,26 @@ vi.mock("electron", () => ({
 }));
 
 import * as ElectronProtocol from "./ElectronProtocol.ts";
+import { NILOX_DESKTOP_DISTRIBUTION } from "@t3tools/shared/desktopDistribution";
 
 describe("ElectronProtocol", () => {
   beforeEach(() => {
     handleMock.mockReset();
     netFetchMock.mockReset();
     unhandleMock.mockReset();
+  });
+
+  it("resolves official and Nilox renderer schemes and origins", () => {
+    assert.equal(ElectronProtocol.getDesktopUrl(false), "t3code://app/");
+    assert.equal(ElectronProtocol.getDesktopUrl(true), "t3code-dev://app/");
+    assert.equal(
+      ElectronProtocol.getDesktopUrl(false, NILOX_DESKTOP_DISTRIBUTION),
+      "t3code-nilox://app/",
+    );
+    assert.equal(
+      ElectronProtocol.getDesktopUrl(true, NILOX_DESKTOP_DISTRIBUTION),
+      "t3code-nilox-dev://app/",
+    );
   });
 
   it.effect("proxies the stable renderer origin to the current app server", () =>

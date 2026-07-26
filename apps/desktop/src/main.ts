@@ -41,6 +41,7 @@ import * as DesktopBackendPool from "./backend/DesktopBackendPool.ts";
 import * as DesktopLocalEnvironmentAuth from "./backend/DesktopLocalEnvironmentAuth.ts";
 import * as DesktopNetworkInterfaces from "./backend/DesktopNetworkInterfaces.ts";
 import * as DesktopEnvironment from "./app/DesktopEnvironment.ts";
+import { resolveDesktopDistribution } from "@t3tools/shared/desktopDistribution";
 import * as DesktopLifecycle from "./app/DesktopLifecycle.ts";
 import * as DesktopShutdown from "./app/DesktopShutdown.ts";
 import * as DesktopObservability from "./app/DesktopObservability.ts";
@@ -60,11 +61,17 @@ import * as DesktopWslBackend from "./wsl/DesktopWslBackend.ts";
 import * as DesktopWslEnvironment from "./wsl/DesktopWslEnvironment.ts";
 
 declare const __T3CODE_BUILD_REMOTE_CLI_PACKAGE_SPEC__: string | undefined;
+declare const __T3CODE_BUILD_DESKTOP_IDENTITY__: string | undefined;
 
 const embeddedRemoteCliPackageSpec =
   typeof __T3CODE_BUILD_REMOTE_CLI_PACKAGE_SPEC__ === "undefined"
     ? ""
     : __T3CODE_BUILD_REMOTE_CLI_PACKAGE_SPEC__.trim();
+const desktopDistribution = resolveDesktopDistribution(
+  typeof __T3CODE_BUILD_DESKTOP_IDENTITY__ === "undefined"
+    ? undefined
+    : __T3CODE_BUILD_DESKTOP_IDENTITY__,
+);
 
 const desktopEnvironmentLayer = Layer.unwrap(
   Effect.gen(function* () {
@@ -78,6 +85,7 @@ const desktopEnvironmentLayer = Layer.unwrap(
       homeDirectory: NodeOS.homedir(),
       platform,
       processArch,
+      distribution: desktopDistribution,
       ...metadata,
     });
   }),
@@ -92,17 +100,26 @@ const resolveDesktopSshCliRunner = (
     return {
       nodeScriptPath: devRemoteEntryPath,
       nodeEngineRange: serverPackageJson.engines.node,
+      remoteHomeDirName: environment.distribution.remoteHomeDirName,
     };
   }
+  const niloxReleasePackageSpec =
+    environment.distribution.id === "nilox" &&
+    environment.distribution.releaseRepository !== undefined
+      ? `https://github.com/${environment.distribution.releaseRepository}/releases/download/pi-v${environment.appVersion}/t3-${environment.appVersion}.tgz`
+      : "";
+  const packageSpecOverride = embeddedRemoteCliPackageSpec || niloxReleasePackageSpec;
   return {
     packageSpec: resolveRemoteT3CliPackageSpec({
       appVersion: environment.appVersion,
       updateChannel: settings.updateChannel,
       isDevelopment: environment.isDevelopment,
-      packageSpecOverride: embeddedRemoteCliPackageSpec,
+      packageSpecOverride,
     }),
-    preferPackageSpec: embeddedRemoteCliPackageSpec.length > 0,
+    preferPackageSpec:
+      environment.distribution.id === "nilox" || embeddedRemoteCliPackageSpec.length > 0,
     nodeEngineRange: serverPackageJson.engines.node,
+    remoteHomeDirName: environment.distribution.remoteHomeDirName,
   };
 };
 

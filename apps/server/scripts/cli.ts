@@ -15,6 +15,10 @@ import {
   resolveWebAssetBrandForPackageVersion,
   resolveWebIconOverrides,
 } from "../../../scripts/lib/brand-assets.ts";
+import {
+  parseDesktopDistributionId,
+  type DesktopDistributionId,
+} from "@t3tools/shared/desktopDistribution";
 import { resolveCatalogDependencies } from "../../../scripts/lib/resolve-catalog.ts";
 import { fromJsonStringPretty } from "@t3tools/shared/schemaJson";
 import { fromYaml } from "@t3tools/shared/schemaYaml";
@@ -86,10 +90,12 @@ const preparePublishIcons = Effect.fn("preparePublishIcons")(function* (
   repoRoot: string,
   serverDir: string,
   version: string,
+  desktopIdentity: DesktopDistributionId = "official",
 ) {
   const path = yield* Path.Path;
   const fs = yield* FileSystem.FileSystem;
-  const brand = resolveWebAssetBrandForPackageVersion(version);
+  const brand =
+    desktopIdentity === "nilox" ? "nilox" : resolveWebAssetBrandForPackageVersion(version);
   const icons = resolveWebIconOverrides(brand, "dist/client").map((override) => ({
     sourcePath: path.join(repoRoot, override.sourceRelativePath),
     targetPath: path.join(serverDir, override.targetRelativePath),
@@ -201,6 +207,7 @@ const preparePackageMetadata = Effect.fn("preparePackageMetadata")(function* (
   version: string,
   repoRoot: string,
   serverDir: string,
+  desktopIdentity: DesktopDistributionId = "official",
 ) {
   const path = yield* Path.Path;
   const fs = yield* FileSystem.FileSystem;
@@ -227,7 +234,7 @@ const preparePackageMetadata = Effect.fn("preparePackageMetadata")(function* (
   return {
     packageJsonString: yield* encodePackageJson(pkg),
     originalPackageJson: yield* fs.readFile(packageJsonPath),
-    icons: yield* preparePublishIcons(repoRoot, serverDir, version),
+    icons: yield* preparePublishIcons(repoRoot, serverDir, version, desktopIdentity),
   } satisfies PreparedPackageMetadata;
 });
 
@@ -345,6 +352,7 @@ const packCmd = Command.make(
   {
     appVersion: Flag.string("app-version").pipe(Flag.optional),
     packDestination: Flag.string("pack-destination").pipe(Flag.withDefault("release")),
+    desktopIdentity: Flag.string("desktop-identity").pipe(Flag.withDefault("official")),
     verbose: Flag.boolean("verbose").pipe(Flag.withDefault(false)),
   },
   (config) =>
@@ -353,6 +361,7 @@ const packCmd = Command.make(
       const fs = yield* FileSystem.FileSystem;
       const repoRoot = yield* RepoRoot;
       const serverDir = path.join(repoRoot, "apps/server");
+      const desktopIdentity = parseDesktopDistributionId(config.desktopIdentity);
 
       for (const relPath of ["dist/bin.mjs", "dist/client/index.html"]) {
         const abs = path.join(serverDir, relPath);
@@ -367,6 +376,7 @@ const packCmd = Command.make(
           Option.getOrElse(config.appVersion, () => serverPackageJson.version),
           repoRoot,
           serverDir,
+          desktopIdentity,
         ),
         (resource) =>
           Effect.gen(function* () {
