@@ -144,6 +144,28 @@ function respond(request, data, extra = {}) {
   });
 }
 
+function mockUsage(prefix, defaults) {
+  const value = (name, fallback) => {
+    const configured = env[`${prefix}${name}`];
+    if (configured === undefined) return fallback;
+    const parsed = Number(configured);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  };
+  const input = value("INPUT", defaults.input);
+  const output = value("OUTPUT", defaults.output);
+  const cacheRead = value("CACHE_READ", defaults.cacheRead);
+  const cacheWrite = value("CACHE_WRITE", defaults.cacheWrite);
+  const reasoning = value("REASONING", defaults.reasoning || 0);
+  return {
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+    ...(reasoning > 0 ? { reasoning } : {}),
+    totalTokens: input + output + cacheRead + cacheWrite,
+  };
+}
+
 function emitPromptEvents() {
   streaming = true;
   write({ type: "agent_start" });
@@ -154,7 +176,12 @@ function emitPromptEvents() {
       role: "assistant",
       content: [{ type: "text", text: beforeToolText }],
       stopReason: "toolUse",
-      usage: { input: 20, output: 2, cacheRead: 3 },
+      usage: mockUsage("T3_PI_MOCK_FIRST_USAGE_", {
+        input: 20,
+        output: 2,
+        cacheRead: 3,
+        cacheWrite: 4,
+      }),
     };
     write({ type: "message_start", message: firstMessage });
     write({
@@ -204,7 +231,12 @@ function emitPromptEvents() {
       role: "assistant",
       content: [{ type: "text", text: assistantText }],
       stopReason: aborted ? "aborted" : "stop",
-      usage: { input: 25, output: 10, cacheRead: 3 },
+      usage: mockUsage("T3_PI_MOCK_SECOND_USAGE_", {
+        input: 25,
+        output: 10,
+        cacheRead: 5,
+        cacheWrite: 6,
+      }),
     };
     write({ type: "message_start", message: finalMessage });
     write({
@@ -267,7 +299,12 @@ function emitPromptEvents() {
       role: "assistant",
       content: [{ type: "text", text: assistantText }],
       stopReason: aborted ? "aborted" : "stop",
-      usage: { input: 20, output: 10, cacheRead: 3 },
+      usage: mockUsage("T3_PI_MOCK_USAGE_", {
+        input: 20,
+        output: 10,
+        cacheRead: 3,
+        cacheWrite: 0,
+      }),
     },
   });
   appendMessageEntry("assistant", [{ type: "text", text: assistantText }]);

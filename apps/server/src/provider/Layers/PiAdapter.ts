@@ -98,6 +98,14 @@ interface AssistantBlock {
   completed: boolean;
 }
 
+interface PiAssistantTokenUsage {
+  readonly usedTokens: number;
+  readonly inputTokens: number;
+  readonly cachedInputTokens: number;
+  readonly outputTokens: number;
+  readonly reasoningOutputTokens: number;
+}
+
 interface PiSessionContext {
   session: ProviderSession;
   readonly threadId: ThreadId;
@@ -109,6 +117,7 @@ interface PiSessionContext {
   unsubscribeExit: (() => void) | undefined;
   readonly pendingUi: Map<ApprovalRequestId, PendingUi>;
   readonly assistantBlocks: Map<string, AssistantBlock>;
+  readonly assistantUsageByMessage: Map<number, PiAssistantTokenUsage>;
   assistantMessageSequence: number;
   activeAssistantMessageSequence: number | undefined;
   turns: Array<PiTurnRecord>;
@@ -578,19 +587,37 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
       ctx: PiSessionContext,
       message: Record<string, unknown>,
       rawPayload: unknown,
+      messageSequence: number,
     ) =>
       Effect.gen(function* () {
         if (message.role !== "assistant" || !isRecord(message.usage)) return;
         const usage = message.usage;
-        const input = typeof usage.input === "number" ? Math.max(0, usage.input) : 0;
-        const output = typeof usage.output === "number" ? Math.max(0, usage.output) : 0;
-        const cacheRead = typeof usage.cacheRead === "number" ? Math.max(0, usage.cacheRead) : 0;
+        const tokenCount = (value: unknown) =>
+          typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.round(value)) : 0;
+        const input = tokenCount(usage.input);
+        const output = tokenCount(usage.output);
+        const cacheRead = tokenCount(usage.cacheRead);
+        const cacheWrite = tokenCount(usage.cacheWrite);
         const reasoningOutput =
           typeof usage.reasoning === "number"
-            ? Math.max(0, usage.reasoning)
+            ? tokenCount(usage.reasoning)
             : typeof usage.reasoningOutput === "number"
-              ? Math.max(0, usage.reasoningOutput)
+              ? tokenCount(usage.reasoningOutput)
               : 0;
+        const inputTokens = input + cacheRead + cacheWrite;
+        const usedTokens = inputTokens + output;
+        const lastUsage: PiAssistantTokenUsage = {
+          usedTokens,
+          inputTokens,
+          cachedInputTokens: cacheRead,
+          outputTokens: output,
+          reasoningOutputTokens: reasoningOutput,
+        };
+        ctx.assistantUsageByMessage.set(messageSequence, lastUsage);
+        const totalProcessedTokens = [...ctx.assistantUsageByMessage.values()].reduce(
+          (total, current) => total + current.usedTokens,
+          0,
+        );
         const state = yield* ctx.runtime.getState().pipe(Effect.orElseSucceed(() => undefined));
         yield* offer({
           type: "thread.token-usage.updated",
@@ -599,14 +626,14 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
           turnId: ctx.activeTurnId,
           payload: {
             usage: {
-              usedTokens: input + output + cacheRead,
-              totalProcessedTokens: input + output + cacheRead,
-              inputTokens: input,
+              usedTokens,
+              totalProcessedTokens,
+              inputTokens,
               cachedInputTokens: cacheRead,
               outputTokens: output,
               ...(reasoningOutput > 0 ? { reasoningOutputTokens: reasoningOutput } : {}),
-              lastUsedTokens: input + output + cacheRead,
-              lastInputTokens: input,
+              lastUsedTokens: usedTokens,
+              lastInputTokens: inputTokens,
               lastCachedInputTokens: cacheRead,
               lastOutputTokens: output,
               ...(reasoningOutput > 0 ? { lastReasoningOutputTokens: reasoningOutput } : {}),
@@ -795,7 +822,15 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
               const message = event.message;
               if (message.role === "assistant") {
                 ctx.finalStopReason = nonEmpty(message.stopReason) ?? ctx.finalStopReason;
-                yield* emitUsage(ctx, message, rawPayload);
+                if (ctx.assistantMessageSequence === 0) {
+                  ctx.assistantMessageSequence = 1;
+                }
+                yield* emitUsage(
+                  ctx,
+                  message,
+                  rawPayload,
+                  ctx.activeAssistantMessageSequence ?? ctx.assistantMessageSequence,
+                );
                 ctx.activeAssistantMessageSequence = undefined;
               }
             }
@@ -1164,6 +1199,7 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
             unsubscribeExit: undefined,
             pendingUi: new Map(),
             assistantBlocks: new Map(),
+            assistantUsageByMessage: new Map(),
             assistantMessageSequence: 0,
             activeAssistantMessageSequence: undefined,
             turns,
@@ -1287,6 +1323,7 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
             ctx.turns.push({ id: turnId, items: [] });
             ctx.toolUses = 0;
             ctx.finalStopReason = undefined;
+            ctx.assistantUsageByMessage.clear();
             ctx.assistantMessageSequence = 0;
             ctx.activeAssistantMessageSequence = undefined;
             ctx.assistantBlocks.clear();

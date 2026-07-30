@@ -301,6 +301,22 @@ describe("PiAdapter lifecycle and event mapping", () => {
         expect(types).toContain("item.completed");
         expect(types).toContain("thread.token-usage.updated");
         expect(types.filter((type) => type === "turn.completed")).toHaveLength(1);
+        const usageEvents = events.filter((event) => event.type === "thread.token-usage.updated");
+        expect(usageEvents).toHaveLength(1);
+        expect(usageEvents[0]?.payload.usage).toEqual({
+          usedTokens: 33,
+          totalProcessedTokens: 33,
+          inputTokens: 23,
+          cachedInputTokens: 3,
+          outputTokens: 10,
+          lastUsedTokens: 33,
+          lastInputTokens: 23,
+          lastCachedInputTokens: 3,
+          lastOutputTokens: 10,
+          toolUses: 1,
+          maxTokens: 128_000,
+          compactsAutomatically: true,
+        });
         expect(
           events
             .filter((event) => event.type === "content.delta")
@@ -313,6 +329,50 @@ describe("PiAdapter lifecycle and event mapping", () => {
         ).toBe(true);
         yield* adapter.stopSession(threadId);
       }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("maps cache reads and writes into the shared token usage contract", () =>
+    Effect.gen(function* () {
+      const { adapter } = yield* makeFixture({
+        T3_PI_MOCK_USAGE_INPUT: "11",
+        T3_PI_MOCK_USAGE_OUTPUT: "4",
+        T3_PI_MOCK_USAGE_CACHE_READ: "5",
+        T3_PI_MOCK_USAGE_CACHE_WRITE: "7",
+        T3_PI_MOCK_USAGE_REASONING: "2",
+      });
+      const threadId = ThreadId.make("pi-cached-usage");
+      yield* adapter.startSession({
+        provider: PI,
+        threadId,
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+
+      const eventsFiber = yield* collectThrough(adapter.streamEvents, "turn.completed").pipe(
+        Effect.forkScoped,
+      );
+      yield* Effect.yieldNow;
+      yield* adapter.sendTurn({ threadId, input: "Use cached context", attachments: [] });
+      const events = yield* Fiber.join(eventsFiber);
+      const usageEvents = events.filter((event) => event.type === "thread.token-usage.updated");
+
+      expect(usageEvents).toHaveLength(1);
+      expect(usageEvents[0]?.payload.usage).toMatchObject({
+        usedTokens: 27,
+        totalProcessedTokens: 27,
+        inputTokens: 23,
+        cachedInputTokens: 5,
+        outputTokens: 4,
+        reasoningOutputTokens: 2,
+        lastUsedTokens: 27,
+        lastInputTokens: 23,
+        lastCachedInputTokens: 5,
+        lastOutputTokens: 4,
+        lastReasoningOutputTokens: 2,
+      });
+
+      yield* adapter.stopSession(threadId);
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
   it.effect("preserves assistant message boundaries across tool loops", () =>
@@ -343,6 +403,7 @@ describe("PiAdapter lifecycle and event mapping", () => {
           ? [{ itemId: event.itemId, delta: event.payload.delta }]
           : [],
       );
+      const usageEvents = events.filter((event) => event.type === "thread.token-usage.updated");
 
       expect(assistantStarts).toHaveLength(2);
       expect(assistantStarts[0]?.itemId).not.toBe(assistantStarts[1]?.itemId);
@@ -363,6 +424,27 @@ describe("PiAdapter lifecycle and event mapping", () => {
       const secondAssistantIndex = events.findIndex((event) => event === assistantStarts[1]);
       expect(toolCompletedIndex).toBeGreaterThan(firstAssistantIndex);
       expect(secondAssistantIndex).toBeGreaterThan(toolCompletedIndex);
+      expect(usageEvents).toHaveLength(2);
+      expect(usageEvents[0]?.payload.usage).toMatchObject({
+        usedTokens: 29,
+        totalProcessedTokens: 29,
+        inputTokens: 27,
+        cachedInputTokens: 3,
+        outputTokens: 2,
+        toolUses: 0,
+      });
+      expect(usageEvents[1]?.payload.usage).toMatchObject({
+        usedTokens: 46,
+        totalProcessedTokens: 75,
+        inputTokens: 36,
+        cachedInputTokens: 5,
+        outputTokens: 10,
+        lastUsedTokens: 46,
+        lastInputTokens: 36,
+        lastCachedInputTokens: 5,
+        lastOutputTokens: 10,
+        toolUses: 1,
+      });
 
       yield* adapter.stopSession(threadId);
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
