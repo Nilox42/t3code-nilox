@@ -83,6 +83,15 @@ const collectThrough = (
   eventType: ProviderRuntimeEvent["type"],
 ) => Stream.runCollect(Stream.takeUntil(stream, (event) => event.type === eventType));
 
+const readMockRequests = Effect.fn("readPiMockRequests")(function* (requestLog: string) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const contents = yield* fileSystem.readFileString(requestLog);
+  return contents
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as { readonly request: { readonly type?: string } });
+});
+
 function isMcpBridgeUnavailableWarning(event: ProviderRuntimeEvent): boolean {
   if (event.type !== "runtime.warning") return false;
   const detail = event.payload.detail;
@@ -355,6 +364,129 @@ describe("PiAdapter lifecycle and event mapping", () => {
         ).toBe(true);
         yield* adapter.stopSession(threadId);
       }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("does not repeat unchanged model setup on consecutive turns", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const requestLog = path.join(
+        yield* fileSystem.makeTempDirectory({ prefix: "pi-model-cache-" }),
+        "requests.jsonl",
+      );
+      const selection = createModelSelection(PI_INSTANCE, "mock-provider/team/model", [
+        { id: "thinkingLevel", value: "xhigh" },
+      ]);
+      const { adapter } = yield* makeFixture({ T3_PI_MOCK_REQUEST_LOG: requestLog });
+      const threadId = ThreadId.make("pi-model-cache");
+      yield* adapter.startSession({
+        provider: PI,
+        threadId,
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+        modelSelection: selection,
+      });
+
+      for (const input of ["First turn", "Second turn"]) {
+        const idle = yield* Stream.runHead(
+          Stream.filter(
+            adapter.streamEvents,
+            (event) => event.type === "thread.state.changed" && event.payload.state === "idle",
+          ),
+        ).pipe(Effect.forkScoped);
+        yield* Effect.yieldNow;
+        yield* adapter.sendTurn({ threadId, input, modelSelection: selection });
+        yield* Fiber.join(idle);
+      }
+
+      const requests = yield* readMockRequests(requestLog);
+      expect(requests.filter(({ request }) => request.type === "set_model")).toHaveLength(1);
+      expect(requests.filter(({ request }) => request.type === "set_thinking_level")).toHaveLength(
+        1,
+      );
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("reconfigures a changed selection and retries after model authentication fails", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const requestLog = path.join(
+        yield* fileSystem.makeTempDirectory({ prefix: "pi-model-retry-" }),
+        "requests.jsonl",
+      );
+      const { adapter } = yield* makeFixture({
+        T3_PI_MOCK_REQUEST_LOG: requestLog,
+        T3_PI_MOCK_FAIL_COMMAND_ONCE: "set_model",
+      });
+      const threadId = ThreadId.make("pi-model-retry");
+      yield* adapter.startSession({
+        provider: PI,
+        threadId,
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      const selection = createModelSelection(PI_INSTANCE, "mock-provider/recovered-model", [
+        { id: "thinkingLevel", value: "high" },
+      ]);
+
+      const error = yield* Effect.flip(
+        adapter.sendTurn({ threadId, input: "Fails authentication", modelSelection: selection }),
+      );
+      expect(error.message).toMatch(/injected set_model failure/i);
+
+      const idle = yield* Stream.runHead(
+        Stream.filter(
+          adapter.streamEvents,
+          (event) => event.type === "thread.state.changed" && event.payload.state === "idle",
+        ),
+      ).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+      yield* adapter.sendTurn({
+        threadId,
+        input: "Retries authentication",
+        modelSelection: selection,
+      });
+      yield* Fiber.join(idle);
+
+      const requests = yield* readMockRequests(requestLog);
+      expect(requests.filter(({ request }) => request.type === "set_model")).toHaveLength(2);
+      expect(requests.filter(({ request }) => request.type === "set_thinking_level")).toHaveLength(
+        1,
+      );
+      expect(
+        (yield* adapter.listSessions()).find((session) => session.threadId === threadId)?.model,
+      ).toBe("mock-provider/recovered-model");
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("scopes cached model setup to one Pi session process", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const requestLog = path.join(
+        yield* fileSystem.makeTempDirectory({ prefix: "pi-model-session-scope-" }),
+        "requests.jsonl",
+      );
+      const selection = createModelSelection(PI_INSTANCE, "mock-provider/team/model");
+      const { adapter } = yield* makeFixture({ T3_PI_MOCK_REQUEST_LOG: requestLog });
+      const threadId = ThreadId.make("pi-model-session-scope");
+      const start = () =>
+        adapter.startSession({
+          provider: PI,
+          threadId,
+          cwd: process.cwd(),
+          runtimeMode: "full-access",
+          modelSelection: selection,
+        });
+
+      yield* start();
+      yield* adapter.stopSession(threadId);
+      yield* start();
+
+      const requests = yield* readMockRequests(requestLog);
+      expect(requests.filter(({ request }) => request.type === "set_model")).toHaveLength(2);
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
   it.effect("publishes the initial Pi session name as thread metadata", () =>

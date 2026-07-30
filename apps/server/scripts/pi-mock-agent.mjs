@@ -61,6 +61,7 @@ const entries =
     : [];
 let entrySequence = entries.length;
 let heldStateRequest;
+const failedOnceCommands = new Set();
 const outputQueue = [];
 let outputWriting = false;
 
@@ -447,7 +448,11 @@ input.on("line", (line) => {
   logRequest(request);
 
   if (request.type === "extension_ui_response") return;
-  if (env.T3_PI_MOCK_FAIL_COMMAND === request.type) {
+  if (
+    env.T3_PI_MOCK_FAIL_COMMAND === request.type ||
+    (env.T3_PI_MOCK_FAIL_COMMAND_ONCE === request.type && !failedOnceCommands.has(request.type))
+  ) {
+    failedOnceCommands.add(request.type);
     write({
       id: request.id,
       type: "response",

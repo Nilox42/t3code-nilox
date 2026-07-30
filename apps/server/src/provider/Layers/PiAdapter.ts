@@ -3,6 +3,7 @@ import {
   ApprovalRequestId,
   EventId,
   McpStatusSnapshot,
+  type ModelSelection,
   type PiSettings,
   type ProviderApprovalDecision,
   type ProviderRuntimeEvent,
@@ -59,8 +60,11 @@ import {
   parsePiModelSlug,
   PiRpcResumeCursorSchema,
   type PiRpcEvent,
+  type PiModel,
+  type PiRpcError,
   type PiRpcResumeCursor,
   type PiRpcSessionRuntime,
+  type PiThinkingLevel,
 } from "../pi/PiRpcSessionRuntime.ts";
 import type { PiAdapterShape } from "../Services/PiAdapter.ts";
 
@@ -136,6 +140,8 @@ interface PiSessionContext {
   readonly mcpServerNames: Set<string>;
   finalErrorMessage: string | undefined;
   toolUses: number;
+  currentModel: PiModel | undefined;
+  currentThinkingLevel: PiThinkingLevel;
   stopped: boolean;
   settledTurns: Set<TurnId>;
 }
@@ -163,6 +169,10 @@ function nonEmpty(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
   return trimmed || undefined;
+}
+
+function piModelSlug(model: PiModel | undefined): string | undefined {
+  return model ? `${model.provider}/${model.id}` : undefined;
 }
 
 type PiTurnRehydration =
@@ -620,6 +630,42 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
         return resumeCursor;
       });
 
+    const applyModelSelection = (
+      ctx: PiSessionContext,
+      selection: ModelSelection,
+    ): Effect.Effect<void, ProviderAdapterValidationError | PiRpcError> =>
+      Effect.gen(function* () {
+        const parsed = parsePiModelSlug(selection.model);
+        if (!parsed) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "sendTurn",
+            issue: `Invalid Pi model slug '${selection.model}'. Expected <provider>/<model-id>.`,
+          });
+        }
+
+        const desiredModelSlug = `${parsed.provider}/${parsed.modelId}`;
+        const currentModel = ctx.currentModel;
+        const modelChanged = !currentModel || piModelSlug(currentModel) !== desiredModelSlug;
+        let selectedModel: PiModel;
+        if (modelChanged) {
+          selectedModel = yield* ctx.runtime.setModel(parsed.provider, parsed.modelId);
+          ctx.currentModel = selectedModel;
+        } else {
+          selectedModel = currentModel;
+        }
+
+        const thinking = clampPiThinkingLevel(
+          getModelSelectionStringOptionValue(selection, "thinkingLevel"),
+          selectedModel,
+          ctx.currentThinkingLevel,
+        );
+        if (modelChanged || thinking !== ctx.currentThinkingLevel) {
+          yield* ctx.runtime.setThinkingLevel(thinking);
+          ctx.currentThinkingLevel = thinking;
+        }
+      });
+
     const captureLatestUserEntry = (ctx: PiSessionContext, turnId: TurnId) =>
       Effect.gen(function* () {
         const entries = yield* ctx.runtime.getEntries().pipe(Effect.orElseSucceed(() => undefined));
@@ -930,6 +976,9 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
             });
             return;
           }
+          case "thinking_level_changed":
+            if (event.level) ctx.currentThinkingLevel = event.level;
+            return;
           case "agent_start":
             if (!turnId) return;
             ctx.session = {
@@ -1432,6 +1481,8 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
             mcpServerNames: new Set(mcpBridgeEnabled ? ["t3-code"] : []),
             finalErrorMessage: undefined,
             toolUses: 0,
+            currentModel: state.model ?? undefined,
+            currentThinkingLevel: state.thinkingLevel,
             stopped: false,
             settledTurns: new Set(),
           };
@@ -1576,24 +1627,8 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
 
           const selection =
             input.modelSelection?.instanceId === boundInstanceId ? input.modelSelection : undefined;
-          let state = yield* ctx.runtime.getState();
           if (selection) {
-            const parsed = parsePiModelSlug(selection.model);
-            if (!parsed) {
-              return yield* new ProviderAdapterValidationError({
-                provider: PROVIDER,
-                operation: "sendTurn",
-                issue: `Invalid Pi model slug '${selection.model}'.`,
-              });
-            }
-            const selectedModel = yield* ctx.runtime.setModel(parsed.provider, parsed.modelId);
-            const thinking = clampPiThinkingLevel(
-              getModelSelectionStringOptionValue(selection, "thinkingLevel"),
-              selectedModel,
-              state.thinkingLevel,
-            );
-            yield* ctx.runtime.setThinkingLevel(thinking);
-            state = yield* ctx.runtime.getState();
+            yield* applyModelSelection(ctx, selection);
           }
 
           yield* ctx.runtime.prompt({
@@ -1601,13 +1636,16 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
             images,
             ...(steering ? { streamingBehavior: "steer" as const } : {}),
           });
-          state = yield* ctx.runtime.getState();
+          const state = yield* ctx.runtime.getState();
+          ctx.currentModel = state.model ?? undefined;
+          ctx.currentThinkingLevel = state.thinkingLevel;
           ctx.activeTurnId = turnId;
+          const model = piModelSlug(ctx.currentModel);
           ctx.session = {
             ...ctx.session,
             status: "running",
             activeTurnId: turnId,
-            ...(state.model ? { model: `${state.model.provider}/${state.model.id}` } : {}),
+            ...(model ? { model } : {}),
             updatedAt: DateTime.formatIso(yield* DateTime.now),
           };
           if (!steering) {
@@ -1617,8 +1655,8 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
               ...baseEvent(ctx),
               turnId,
               payload: {
-                ...(state.model ? { model: `${state.model.provider}/${state.model.id}` } : {}),
-                effort: state.thinkingLevel,
+                ...(model ? { model } : {}),
+                effort: ctx.currentThinkingLevel,
               },
             });
           }
