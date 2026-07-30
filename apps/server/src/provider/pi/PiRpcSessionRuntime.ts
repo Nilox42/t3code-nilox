@@ -87,7 +87,7 @@ const PiRpcResponseEnvelope = Schema.Struct({
   error: OptionalString,
 });
 
-const PiRpcEventType = Schema.Literals([
+const PI_RPC_EVENT_TYPES = [
   "agent_start",
   "agent_end",
   "agent_settled",
@@ -110,7 +110,9 @@ const PiRpcEventType = Schema.Literals([
   "summarization_retry_finished",
   "extension_error",
   "extension_ui_request",
-]);
+] as const;
+const PiRpcEventType = Schema.Literals(PI_RPC_EVENT_TYPES);
+const knownPiRpcEventTypes = new Set<string>(PI_RPC_EVENT_TYPES);
 
 const PiRpcEventEnvelope = Schema.Struct({
   type: PiRpcEventType,
@@ -404,6 +406,7 @@ export const makePiRpcSessionRuntime = Effect.fn("makePiRpcSessionRuntime")(func
   options: PiRpcRuntimeOptions,
 ): Effect.fn.Return<PiRpcSessionRuntime, PiRpcError, Scope.Scope> {
   const scope = yield* Scope.Scope;
+  const runFork = Effect.runForkWith(yield* Effect.context<never>());
   const args = yield* Effect.try({
     try: () => buildPiManagedArgs(options),
     catch: (cause) =>
@@ -537,11 +540,23 @@ export const makePiRpcSessionRuntime = Effect.fn("makePiRpcSessionRuntime")(func
       return;
     }
 
+    const eventType =
+      typeof raw === "object" &&
+      raw !== null &&
+      "type" in raw &&
+      typeof (raw as { readonly type?: unknown }).type === "string"
+        ? (raw as { readonly type: string }).type
+        : undefined;
+    if (eventType !== undefined && !knownPiRpcEventTypes.has(eventType)) {
+      runFork(Effect.logDebug("Ignoring unknown Pi RPC event", { eventType }));
+      return;
+    }
+
     let event: PiRpcEvent;
     try {
       event = decodeEventEnvelope(raw);
     } catch (cause) {
-      protocolFailure("Pi emitted an invalid or unsupported event.", cause);
+      protocolFailure("Pi emitted an invalid known event.", cause);
       return;
     }
     for (const listener of listeners) listener(event, raw);

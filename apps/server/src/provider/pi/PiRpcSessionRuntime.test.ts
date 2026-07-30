@@ -1,8 +1,11 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as References from "effect/References";
 import * as TestClock from "effect/testing/TestClock";
 
 import {
@@ -176,6 +179,44 @@ describe("Pi RPC JSONL runtime", () => {
 
       expect(error.operation).toBe("protocol");
       expect(error.detail).toMatch(/malformed JSONL/i);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("ignores unknown additive events and logs a debug diagnostic", () => {
+    const logs: Array<unknown> = [];
+    const logger = Logger.make<unknown, void>(({ message }) => {
+      logs.push(...(Array.isArray(message) ? message : [message]));
+    });
+
+    return Effect.gen(function* () {
+      const runtime = yield* makeRuntime({ T3_PI_MOCK_BEHAVIOR: "unknown-event" });
+      const state = yield* runtime.getState();
+      const models = yield* runtime.getAvailableModels();
+      yield* Effect.yieldNow;
+
+      expect(state.sessionId).toBe("pi-mock-session");
+      expect(models[0]?.id).toBe("mock/model");
+      expect(logs).toContain("Ignoring unknown Pi RPC event");
+      expect(logs).toContainEqual({ eventType: "future_additive_event" });
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(
+          NodeServices.layer,
+          Logger.layer([logger], { mergeWithExisting: false }),
+          Layer.succeed(References.MinimumLogLevel, "Debug"),
+        ),
+      ),
+    );
+  });
+
+  it.effect("rejects malformed payloads for known event types", () =>
+    Effect.gen(function* () {
+      const runtime = yield* makeRuntime({ T3_PI_MOCK_BEHAVIOR: "malformed-known-event" });
+      const error = yield* Effect.flip(runtime.getState());
+
+      expect(error.operation).toBe("protocol");
+      expect(error.detail).toMatch(/invalid known event/i);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 

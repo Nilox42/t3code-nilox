@@ -261,6 +261,18 @@ input.on("line", (line) => {
     process.stdout.write("{not-json}\n");
     return;
   }
+  if (env.T3_PI_MOCK_BEHAVIOR === "unknown-event") {
+    write({ type: "future_additive_event", diagnostic: "mock" });
+  }
+  if (env.T3_PI_MOCK_BEHAVIOR === "malformed-known-event") {
+    write({
+      type: "extension_ui_request",
+      id: "pi-ui-invalid",
+      method: "select",
+      options: [1],
+    });
+    return;
+  }
 
   if (env.T3_PI_MOCK_BEHAVIOR === "out-of-order" && request.type === "get_state") {
     heldStateRequest = request;
