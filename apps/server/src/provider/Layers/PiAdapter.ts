@@ -229,6 +229,7 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
     const crypto = yield* Crypto.Crypto;
     const serverConfig = yield* ServerConfig;
     const sessions = new Map<ThreadId, PiSessionContext>();
+    const unregisteredSessionScopes = new Map<ThreadId, Scope.Closeable>();
     const runtimeEvents = yield* PubSub.unbounded<ProviderRuntimeEvent>();
     const threadLocks = yield* SynchronizedRef.make(new Map<string, Semaphore.Semaphore>());
 
@@ -916,6 +917,7 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
           const existing = sessions.get(input.threadId);
           if (existing && !existing.stopped) yield* stopSessionInternal(existing);
           const sessionScope = yield* Scope.make("sequential");
+          unregisteredSessionScopes.set(input.threadId, sessionScope);
 
           const cwd = path.resolve(input.cwd.trim());
           const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
@@ -1041,6 +1043,7 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
             settledTurns: new Set(),
           };
           sessions.set(input.threadId, ctx);
+          unregisteredSessionScopes.delete(input.threadId);
           ctx.unsubscribeEvent = runtime.onEvent((event, rawPayload) => {
             Effect.runFork(Queue.offer(eventQueue, { type: "event", event, raw: rawPayload }));
           });
@@ -1091,7 +1094,14 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
             });
           }
           return { ...ctx.session };
-        }).pipe(Effect.mapError((cause) => mapAdapterError("startSession", cause))),
+        }).pipe(
+          Effect.mapError((cause) => mapAdapterError("startSession", cause)),
+          Effect.onError(() => {
+            const scope = unregisteredSessionScopes.get(input.threadId);
+            unregisteredSessionScopes.delete(input.threadId);
+            return scope === undefined ? Effect.void : Scope.close(scope, Exit.void);
+          }),
+        ),
       );
 
     const sendTurn: PiAdapterShape["sendTurn"] = (input) =>

@@ -7,6 +7,10 @@ import * as NodeReadline from "node:readline";
 const env = process.env;
 const args = process.argv.slice(2);
 
+if (env.T3_PI_MOCK_PID_FILE) {
+  NodeFS.writeFileSync(env.T3_PI_MOCK_PID_FILE, String(process.pid));
+}
+
 if (args.includes("--version")) {
   if (env.T3_PI_MOCK_VERSION_BEHAVIOR === "timeout") {
     setInterval(() => {}, 60_000);
@@ -224,6 +228,11 @@ function logRequest(request) {
 }
 
 const input = NodeReadline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+input.on("close", () => {
+  if (env.T3_PI_MOCK_STDIN_CLOSED_FILE) {
+    NodeFS.writeFileSync(env.T3_PI_MOCK_STDIN_CLOSED_FILE, "");
+  }
+});
 input.on("line", (line) => {
   let request;
   try {
@@ -234,6 +243,16 @@ input.on("line", (line) => {
   logRequest(request);
 
   if (request.type === "extension_ui_response") return;
+  if (env.T3_PI_MOCK_FAIL_COMMAND === request.type) {
+    write({
+      id: request.id,
+      type: "response",
+      command: request.type,
+      success: false,
+      error: `Injected ${request.type} failure.`,
+    });
+    return;
+  }
   if (env.T3_PI_MOCK_BEHAVIOR === "timeout") return;
   if (env.T3_PI_MOCK_BEHAVIOR === "exit") {
     process.exit(23);

@@ -108,7 +108,166 @@ const installMcpSession = Effect.fn("installPiMcpSession")(function* (threadId: 
   );
 });
 
+const makeStartupFailureFixture = Effect.fn("makePiStartupFailureFixture")(function* (
+  environment: NodeJS.ProcessEnv,
+) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const probeDir = yield* fileSystem.makeTempDirectory({ prefix: "pi-startup-failure-" });
+  const pidFile = path.join(probeDir, "pid");
+  const stdinClosedFile = path.join(probeDir, "stdin-closed");
+  const fixture = yield* makeFixture({
+    ...environment,
+    T3_PI_MOCK_PID_FILE: pidFile,
+    T3_PI_MOCK_STDIN_CLOSED_FILE: stdinClosedFile,
+  });
+  return { ...fixture, pidFile, stdinClosedFile };
+});
+
+const waitForMockProcessCleanup = Effect.fn("waitForPiMockProcessCleanup")(function* (
+  pidFile: string,
+  stdinClosedFile: string,
+) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (yield* fileSystem.exists(pidFile)) break;
+    yield* Effect.sleep("10 millis");
+  }
+  if (!(yield* fileSystem.exists(pidFile))) return false;
+
+  const pid = Number((yield* fileSystem.readFileString(pidFile)).trim());
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const stdinClosed = yield* fileSystem.exists(stdinClosedFile);
+    const processAlive = yield* Effect.sync(() => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    if (stdinClosed && !processAlive) return true;
+    yield* Effect.sleep("10 millis");
+  }
+  return false;
+});
+
 describe("PiAdapter lifecycle and event mapping", () => {
+  it.effect("does not register a session when the Pi process cannot spawn", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const missingBinary = path.join(
+        yield* fileSystem.makeTempDirectory({ prefix: "pi-missing-binary-" }),
+        "missing-pi",
+      );
+      const adapter = yield* makePiAdapter(
+        {
+          enabled: true,
+          binaryPath: missingBinary,
+          agentDir: "",
+          launchArgs: "",
+          trustProjectResources: false,
+        },
+        {
+          instanceId: PI_INSTANCE,
+          environment: process.env,
+          extensionPath: "/tmp/t3-pi-test-extension.mjs",
+          mcpBridge: {
+            available: false,
+            reason: "adapter-not-installed",
+            message: PI_MCP_ADAPTER_REQUIRED_MESSAGE,
+          },
+        },
+      );
+      const threadId = ThreadId.make("pi-startup-spawn-failure");
+
+      const error = yield* Effect.flip(
+        adapter.startSession({
+          provider: PI,
+          threadId,
+          cwd: process.cwd(),
+          runtimeMode: "full-access",
+        }),
+      );
+
+      expect(error.message).toMatch(/spawn|not found|no such file/i);
+      expect(yield* adapter.hasSession(threadId)).toBe(false);
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("closes the Pi process when initial state loading fails", () =>
+    Effect.gen(function* () {
+      const { adapter, pidFile, stdinClosedFile } = yield* makeStartupFailureFixture({
+        T3_PI_MOCK_FAIL_COMMAND: "get_state",
+      });
+      const threadId = ThreadId.make("pi-startup-state-failure");
+
+      const error = yield* Effect.flip(
+        adapter.startSession({
+          provider: PI,
+          threadId,
+          cwd: process.cwd(),
+          runtimeMode: "full-access",
+        }),
+      );
+
+      expect(error.message).toMatch(/injected get_state failure/i);
+      expect(yield* adapter.hasSession(threadId)).toBe(false);
+      expect(yield* waitForMockProcessCleanup(pidFile, stdinClosedFile)).toBe(true);
+    }).pipe(Effect.scoped, Effect.provide(testLayer), TestClock.withLive),
+  );
+
+  it.effect("closes the Pi process when model selection fails", () =>
+    Effect.gen(function* () {
+      const { adapter, pidFile, stdinClosedFile } = yield* makeStartupFailureFixture({
+        T3_PI_MOCK_FAIL_COMMAND: "set_model",
+      });
+      const threadId = ThreadId.make("pi-startup-model-failure");
+
+      const error = yield* Effect.flip(
+        adapter.startSession({
+          provider: PI,
+          threadId,
+          cwd: process.cwd(),
+          runtimeMode: "full-access",
+          modelSelection: createModelSelection(PI_INSTANCE, "mock-provider/team/model"),
+        }),
+      );
+
+      expect(error.message).toMatch(/injected set_model failure/i);
+      expect(yield* adapter.hasSession(threadId)).toBe(false);
+      expect(yield* waitForMockProcessCleanup(pidFile, stdinClosedFile)).toBe(true);
+    }).pipe(Effect.scoped, Effect.provide(testLayer), TestClock.withLive),
+  );
+
+  it.effect("closes the Pi process when resumed session validation fails", () =>
+    Effect.gen(function* () {
+      const { adapter, sessionFile, pidFile, stdinClosedFile } = yield* makeStartupFailureFixture({
+        T3_PI_MOCK_SESSION_ID: "unexpected-session",
+      });
+      const threadId = ThreadId.make("pi-startup-resume-failure");
+
+      const error = yield* Effect.flip(
+        adapter.startSession({
+          provider: PI,
+          threadId,
+          cwd: process.cwd(),
+          runtimeMode: "full-access",
+          resumeCursor: {
+            schemaVersion: 1,
+            sessionFile,
+            sessionId: "expected-session",
+          },
+        }),
+      );
+
+      expect(error.message).toMatch(/unexpected-session.*expected-session/i);
+      expect(yield* adapter.hasSession(threadId)).toBe(false);
+      expect(yield* waitForMockProcessCleanup(pidFile, stdinClosedFile)).toBe(true);
+    }).pipe(Effect.scoped, Effect.provide(testLayer), TestClock.withLive),
+  );
+
   it.effect(
     "configures model/thinking and maps streamed text, reasoning, tools, usage, and completion",
     () =>
