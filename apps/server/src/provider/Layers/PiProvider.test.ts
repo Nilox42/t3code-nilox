@@ -6,7 +6,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 
-import { buildPiModelCatalog, checkPiProviderStatus } from "./PiProvider.ts";
+import { buildPiCommandCatalog, buildPiModelCatalog, checkPiProviderStatus } from "./PiProvider.ts";
 import type { PiMcpBridgeCapability } from "../pi/PiMcpBridge.ts";
 import type { PiModel, PiRpcState } from "../pi/PiRpcSessionRuntime.ts";
 
@@ -87,6 +87,56 @@ describe("Pi Agent model catalog", () => {
   });
 });
 
+describe("Pi Agent command catalog", () => {
+  it("maps supported slash commands, prompt templates, and skills", () => {
+    const catalog = buildPiCommandCatalog([
+      {
+        name: "extension-command",
+        description: "Run an extension command",
+        source: "extension",
+        sourceInfo: {
+          path: "/tmp/extensions/command.ts",
+          scope: "user",
+        },
+      },
+      {
+        name: "review",
+        description: "Review changes",
+        source: "prompt",
+        sourceInfo: {
+          path: "/tmp/prompts/review.md",
+          scope: "project",
+        },
+      },
+      {
+        name: "skill:deploy",
+        description: "Deploy this project",
+        source: "skill",
+        sourceInfo: {
+          path: "/tmp/skills/deploy/SKILL.md",
+          scope: "user",
+        },
+      },
+      { name: "login", description: "Authenticate", source: "built-in" },
+    ]);
+
+    expect(catalog.slashCommands).toEqual([
+      { name: "extension-command", description: "Run an extension command" },
+      { name: "review", description: "Review changes" },
+      { name: "skill:deploy", description: "Deploy this project" },
+    ]);
+    expect(catalog.skills).toEqual([
+      {
+        name: "deploy",
+        description: "Deploy this project",
+        path: "/tmp/skills/deploy/SKILL.md",
+        scope: "user",
+        enabled: true,
+      },
+    ]);
+  });
+});
+
 describe("Pi Agent provider probe", () => {
   it.effect("reports authenticated models and presentation metadata", () =>
     Effect.gen(function* () {
@@ -102,6 +152,21 @@ describe("Pi Agent provider probe", () => {
         version: "0.82.1",
       });
       expect(provider.models[0]?.slug).toBe("mock-provider/mock/model");
+      expect(provider.slashCommands.map((command) => command.name)).toEqual([
+        "agent-command",
+        "non-agent-command",
+        "review",
+        "skill:deploy",
+      ]);
+      expect(provider.skills).toEqual([
+        {
+          name: "deploy",
+          description: "Deploy the current project",
+          path: "/tmp/pi/skills/deploy/SKILL.md",
+          scope: "user",
+          enabled: true,
+        },
+      ]);
     }),
   );
 

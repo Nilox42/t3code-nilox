@@ -1289,6 +1289,7 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
             images,
             ...(steering ? { streamingBehavior: "steer" as const } : {}),
           });
+          state = yield* ctx.runtime.getState();
           ctx.activeTurnId = turnId;
           ctx.session = {
             ...ctx.session,
@@ -1308,6 +1309,9 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
                 effort: state.thinkingLevel,
               },
             });
+          }
+          if (!steering && !state.isStreaming) {
+            yield* settleTurn(ctx, "completed");
           }
           return {
             threadId: input.threadId,

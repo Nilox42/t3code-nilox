@@ -315,6 +315,67 @@ describe("PiAdapter lifecycle and event mapping", () => {
       }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
+  it.effect("keeps an agent-starting slash command running until Pi settles", () =>
+    Effect.gen(function* () {
+      const { adapter } = yield* makeFixture({ T3_PI_MOCK_PROMPT_DELAY_MS: "50" });
+      const threadId = ThreadId.make("pi-agent-command");
+      yield* adapter.startSession({
+        provider: PI,
+        threadId,
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+
+      const settled = yield* collectThrough(adapter.streamEvents, "turn.completed").pipe(
+        Effect.forkScoped,
+      );
+      yield* Effect.yieldNow;
+      yield* adapter.sendTurn({ threadId, input: "/agent-command" });
+      expect(
+        (yield* adapter.listSessions()).find((session) => session.threadId === threadId)?.status,
+      ).toBe("running");
+      const events = yield* Fiber.join(settled);
+
+      expect(events.filter((event) => event.type === "turn.completed")).toHaveLength(1);
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        const status = (yield* adapter.listSessions()).find(
+          (session) => session.threadId === threadId,
+        )?.status;
+        if (status === "ready") break;
+        yield* Effect.yieldNow;
+      }
+      expect(
+        (yield* adapter.listSessions()).find((session) => session.threadId === threadId)?.status,
+      ).toBe("ready");
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("completes a non-agent slash command without waiting for agent_settled", () =>
+    Effect.gen(function* () {
+      const { adapter } = yield* makeFixture();
+      const threadId = ThreadId.make("pi-non-agent-command");
+      yield* adapter.startSession({
+        provider: PI,
+        threadId,
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+
+      const settled = yield* collectThrough(adapter.streamEvents, "turn.completed").pipe(
+        Effect.forkScoped,
+      );
+      yield* Effect.yieldNow;
+      const result = yield* adapter.sendTurn({ threadId, input: "/non-agent-command" });
+      const events = yield* Fiber.join(settled);
+
+      expect(result.turnId).toBeDefined();
+      expect(events.map((event) => event.type)).toEqual(["turn.started", "turn.completed"]);
+      expect(
+        (yield* adapter.listSessions()).find((session) => session.threadId === threadId)?.status,
+      ).toBe("ready");
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
   it.effect(
     "validates resume cursors and performs native fork rollback only after a settled turn",
     () =>

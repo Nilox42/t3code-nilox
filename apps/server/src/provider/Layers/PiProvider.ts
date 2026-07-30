@@ -1,4 +1,10 @@
-import type { PiSettings, ServerProviderModel, ServerProvider } from "@t3tools/contracts";
+import type {
+  PiSettings,
+  ServerProvider,
+  ServerProviderModel,
+  ServerProviderSkill,
+  ServerProviderSlashCommand,
+} from "@t3tools/contracts";
 import { ProviderDriverKind } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -21,6 +27,7 @@ import {
   makePiRpcSessionRuntime,
   parsePiVersion,
   PI_MINIMUM_VERSION,
+  type PiRpcCommandInfo,
   type PiModel,
   type PiRpcState,
   supportedThinkingLevels,
@@ -79,6 +86,57 @@ export function buildPiModelCatalog(
       },
     };
   });
+}
+
+function nonEmpty(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
+
+function commandSourceInfo(command: PiRpcCommandInfo): Record<string, unknown> | undefined {
+  return typeof command.sourceInfo === "object" && command.sourceInfo !== null
+    ? (command.sourceInfo as Record<string, unknown>)
+    : undefined;
+}
+
+export function buildPiCommandCatalog(commands: ReadonlyArray<PiRpcCommandInfo>): {
+  readonly slashCommands: ReadonlyArray<ServerProviderSlashCommand>;
+  readonly skills: ReadonlyArray<ServerProviderSkill>;
+} {
+  const slashCommands: Array<ServerProviderSlashCommand> = [];
+  const skills: Array<ServerProviderSkill> = [];
+  const slashNames = new Set<string>();
+  const skillNames = new Set<string>();
+
+  for (const command of commands) {
+    if (!["extension", "prompt", "skill"].includes(command.source)) continue;
+    const name = nonEmpty(command.name);
+    if (!name) continue;
+    const description = nonEmpty(command.description);
+    if (!slashNames.has(name)) {
+      slashNames.add(name);
+      slashCommands.push({ name, ...(description ? { description } : {}) });
+    }
+
+    if (command.source !== "skill") continue;
+    const skillName = name.startsWith("skill:") ? nonEmpty(name.slice("skill:".length)) : name;
+    if (!skillName || skillNames.has(skillName)) continue;
+    const sourceInfo = commandSourceInfo(command);
+    const path = nonEmpty(sourceInfo?.path) ?? nonEmpty(command.path) ?? nonEmpty(command.location);
+    if (!path) continue;
+    const scope = nonEmpty(sourceInfo?.scope);
+    skillNames.add(skillName);
+    skills.push({
+      name: skillName,
+      ...(description ? { description } : {}),
+      path,
+      ...(scope ? { scope } : {}),
+      enabled: true,
+    });
+  }
+
+  return { slashCommands, skills };
 }
 
 const runPiVersionCommand = Effect.fn("runPiVersionCommand")(function* (
@@ -222,16 +280,16 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
       ...(environment ? { environment } : {}),
       agentDir: settings.agentDir,
       launchArgs: settings.launchArgs,
-      trustProjectResources: false,
+      trustProjectResources: settings.trustProjectResources,
       noSession: true,
       noTools: true,
-      disableResources: true,
       requestTimeoutMs: RPC_PROBE_TIMEOUT_MS,
     });
-    const [state, models] = yield* Effect.all([runtime.getState(), runtime.getAvailableModels()], {
-      concurrency: "unbounded",
-    });
-    return { state, models };
+    const [state, models, commands] = yield* Effect.all(
+      [runtime.getState(), runtime.getAvailableModels(), runtime.getCommands()],
+      { concurrency: "unbounded" },
+    );
+    return { state, models, commands };
   }).pipe(Effect.scoped, Effect.timeoutOption(RPC_PROBE_TIMEOUT_MS), Effect.result);
 
   if (Result.isFailure(probe)) {
@@ -253,14 +311,17 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
     });
   }
 
-  const { state, models } = probe.success.value;
+  const { state, models, commands } = probe.success.value;
   const catalog = buildPiModelCatalog(models, state);
+  const commandCatalog = buildPiCommandCatalog(commands);
   return buildServerProvider({
     driver: PROVIDER,
     presentation: PRESENTATION,
     enabled: settings.enabled,
     checkedAt,
     models: catalog,
+    slashCommands: commandCatalog.slashCommands,
+    skills: commandCatalog.skills,
     probe:
       models.length > 0
         ? mcpBridge && !mcpBridge.available

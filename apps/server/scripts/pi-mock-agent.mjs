@@ -320,7 +320,52 @@ input.on("line", (line) => {
       break;
     case "get_commands":
       respond(request, {
-        commands: [{ name: "login", description: "Authenticate", source: "built-in" }],
+        commands: [
+          {
+            name: "agent-command",
+            description: "Start an agent-backed command",
+            source: "extension",
+            sourceInfo: {
+              path: "/tmp/pi/extensions/agent-command.ts",
+              source: "agent-command.ts",
+              scope: "user",
+              origin: "top-level",
+            },
+          },
+          {
+            name: "non-agent-command",
+            description: "Complete without starting the agent",
+            source: "extension",
+            sourceInfo: {
+              path: "/tmp/pi/extensions/non-agent-command.ts",
+              source: "non-agent-command.ts",
+              scope: "user",
+              origin: "top-level",
+            },
+          },
+          {
+            name: "review",
+            description: "Review the current changes",
+            source: "prompt",
+            sourceInfo: {
+              path: "/tmp/pi/prompts/review.md",
+              source: "review.md",
+              scope: "project",
+              origin: "top-level",
+            },
+          },
+          {
+            name: "skill:deploy",
+            description: "Deploy the current project",
+            source: "skill",
+            sourceInfo: {
+              path: "/tmp/pi/skills/deploy/SKILL.md",
+              source: "deploy",
+              scope: "user",
+              origin: "top-level",
+            },
+          },
+        ],
       });
       break;
     case "set_model":
@@ -333,6 +378,11 @@ input.on("line", (line) => {
       break;
     case "prompt":
       aborted = false;
+      if (request.message === "/non-agent-command") {
+        respond(request);
+        break;
+      }
+      streaming = true;
       appendMessageEntry("user", [
         { type: "text", text: request.message },
         ...(request.images || []),
