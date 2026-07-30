@@ -315,6 +315,59 @@ describe("PiAdapter lifecycle and event mapping", () => {
       }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
+  it.effect("preserves assistant message boundaries across tool loops", () =>
+    Effect.gen(function* () {
+      const { adapter } = yield* makeFixture({
+        T3_PI_MOCK_MULTI_MESSAGE: "1",
+        T3_PI_MOCK_ASSISTANT_TEXT: "After tool",
+      });
+      const threadId = ThreadId.make("pi-multi-message");
+      yield* adapter.startSession({
+        provider: PI,
+        threadId,
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+
+      const eventsFiber = yield* collectThrough(adapter.streamEvents, "turn.completed").pipe(
+        Effect.forkScoped,
+      );
+      yield* Effect.yieldNow;
+      yield* adapter.sendTurn({ threadId, input: "Use a tool", attachments: [] });
+      const events = yield* Fiber.join(eventsFiber);
+      const assistantStarts = events.filter(
+        (event) => event.type === "item.started" && event.payload.itemType === "assistant_message",
+      );
+      const assistantDeltas = events.flatMap((event) =>
+        event.type === "content.delta" && event.payload.streamKind === "assistant_text"
+          ? [{ itemId: event.itemId, delta: event.payload.delta }]
+          : [],
+      );
+
+      expect(assistantStarts).toHaveLength(2);
+      expect(assistantStarts[0]?.itemId).not.toBe(assistantStarts[1]?.itemId);
+      expect(assistantDeltas.map((event) => event.delta)).toEqual([
+        "Before ",
+        "tool",
+        "After tool",
+      ]);
+      expect(assistantDeltas.map((event) => event.itemId)).toEqual([
+        assistantStarts[0]?.itemId,
+        assistantStarts[0]?.itemId,
+        assistantStarts[1]?.itemId,
+      ]);
+      const firstAssistantIndex = events.findIndex((event) => event === assistantStarts[0]);
+      const toolCompletedIndex = events.findIndex(
+        (event) => event.type === "item.completed" && event.itemId === "pi-tool-1",
+      );
+      const secondAssistantIndex = events.findIndex((event) => event === assistantStarts[1]);
+      expect(toolCompletedIndex).toBeGreaterThan(firstAssistantIndex);
+      expect(secondAssistantIndex).toBeGreaterThan(toolCompletedIndex);
+
+      yield* adapter.stopSession(threadId);
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
   it.effect("keeps an agent-starting slash command running until Pi settles", () =>
     Effect.gen(function* () {
       const { adapter } = yield* makeFixture({ T3_PI_MOCK_PROMPT_DELAY_MS: "50" });

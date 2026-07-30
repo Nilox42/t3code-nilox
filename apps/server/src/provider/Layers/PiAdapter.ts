@@ -109,6 +109,8 @@ interface PiSessionContext {
   unsubscribeExit: (() => void) | undefined;
   readonly pendingUi: Map<ApprovalRequestId, PendingUi>;
   readonly assistantBlocks: Map<string, AssistantBlock>;
+  assistantMessageSequence: number;
+  activeAssistantMessageSequence: number | undefined;
   turns: Array<PiTurnRecord>;
   activeTurnId: TurnId | undefined;
   interruptingTurnId: TurnId | undefined;
@@ -523,6 +525,7 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
         ctx.activeTurnId = undefined;
         ctx.interruptingTurnId = undefined;
         ctx.finalStopReason = undefined;
+        ctx.activeAssistantMessageSequence = undefined;
         ctx.assistantBlocks.clear();
         const { activeTurnId: _activeTurnId, ...readySession } = ctx.session;
         ctx.session = {
@@ -541,14 +544,17 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
     const openAssistantBlock = (
       ctx: PiSessionContext,
       turnId: TurnId,
+      messageSequence: number,
       kind: "assistant_message" | "reasoning",
       contentIndex: number,
     ) =>
       Effect.gen(function* () {
-        const key = `${kind}:${contentIndex}`;
+        const key = `${messageSequence}:${kind}:${contentIndex}`;
         const existing = ctx.assistantBlocks.get(key);
         if (existing) return existing;
-        const itemId = RuntimeItemId.make(`${turnId}-${kind}-${contentIndex}`);
+        const itemId = RuntimeItemId.make(
+          `${turnId}-message-${messageSequence}-${kind}-${contentIndex}`,
+        );
         const block: AssistantBlock = { itemId, itemType: kind, completed: false };
         ctx.assistantBlocks.set(key, block);
         const item = {
@@ -735,6 +741,12 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
               ...raw(rawPayload, event.type),
             });
             return;
+          case "message_start":
+            if (turnId && isRecord(event.message) && event.message.role === "assistant") {
+              ctx.assistantMessageSequence += 1;
+              ctx.activeAssistantMessageSequence = ctx.assistantMessageSequence;
+            }
+            return;
           case "message_update": {
             if (!turnId || !isRecord(event.assistantMessageEvent)) return;
             const deltaEvent = event.assistantMessageEvent;
@@ -749,7 +761,20 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
             const contentIndex =
               typeof deltaEvent.contentIndex === "number" ? deltaEvent.contentIndex : 0;
             const itemType = deltaType === "text_delta" ? "assistant_message" : "reasoning";
-            const block = yield* openAssistantBlock(ctx, turnId, itemType, contentIndex);
+            const messageSequence =
+              ctx.activeAssistantMessageSequence ??
+              (() => {
+                ctx.assistantMessageSequence += 1;
+                ctx.activeAssistantMessageSequence = ctx.assistantMessageSequence;
+                return ctx.assistantMessageSequence;
+              })();
+            const block = yield* openAssistantBlock(
+              ctx,
+              turnId,
+              messageSequence,
+              itemType,
+              contentIndex,
+            );
             yield* offer({
               type: "content.delta",
               ...(yield* stamp),
@@ -771,6 +796,7 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
               if (message.role === "assistant") {
                 ctx.finalStopReason = nonEmpty(message.stopReason) ?? ctx.finalStopReason;
                 yield* emitUsage(ctx, message, rawPayload);
+                ctx.activeAssistantMessageSequence = undefined;
               }
             }
             return;
@@ -1138,6 +1164,8 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
             unsubscribeExit: undefined,
             pendingUi: new Map(),
             assistantBlocks: new Map(),
+            assistantMessageSequence: 0,
+            activeAssistantMessageSequence: undefined,
             turns,
             activeTurnId: undefined,
             interruptingTurnId: undefined,
@@ -1259,6 +1287,8 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
             ctx.turns.push({ id: turnId, items: [] });
             ctx.toolUses = 0;
             ctx.finalStopReason = undefined;
+            ctx.assistantMessageSequence = 0;
+            ctx.activeAssistantMessageSequence = undefined;
             ctx.assistantBlocks.clear();
           }
 

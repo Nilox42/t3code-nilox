@@ -148,6 +148,82 @@ function emitPromptEvents() {
   streaming = true;
   write({ type: "agent_start" });
   write({ type: "turn_start" });
+  if (env.T3_PI_MOCK_MULTI_MESSAGE === "1") {
+    const beforeToolText = "Before tool";
+    const firstMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: beforeToolText }],
+      stopReason: "toolUse",
+      usage: { input: 20, output: 2, cacheRead: 3 },
+    };
+    write({ type: "message_start", message: firstMessage });
+    write({
+      type: "message_update",
+      message: firstMessage,
+      assistantMessageEvent: {
+        type: "text_delta",
+        contentIndex: 0,
+        delta: "Before ",
+      },
+    });
+    write({
+      type: "message_update",
+      message: firstMessage,
+      assistantMessageEvent: {
+        type: "text_delta",
+        contentIndex: 0,
+        delta: "tool",
+      },
+    });
+    write({ type: "message_end", message: firstMessage });
+    appendMessageEntry("assistant", firstMessage.content);
+    write({
+      type: "tool_execution_start",
+      toolCallId: "pi-tool-1",
+      toolName: env.T3_PI_MOCK_TOOL || "read",
+      args: { path: "README.md" },
+    });
+    write({
+      type: "tool_execution_end",
+      toolCallId: "pi-tool-1",
+      toolName: env.T3_PI_MOCK_TOOL || "read",
+      args: { path: "README.md" },
+      result: { content: [{ type: "text", text: "Done" }] },
+      isError: false,
+    });
+    const toolResultMessage = {
+      role: "toolResult",
+      toolCallId: "pi-tool-1",
+      toolName: env.T3_PI_MOCK_TOOL || "read",
+      content: [{ type: "text", text: "Done" }],
+      isError: false,
+    };
+    write({ type: "message_start", message: toolResultMessage });
+    write({ type: "message_end", message: toolResultMessage });
+    const finalMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: assistantText }],
+      stopReason: aborted ? "aborted" : "stop",
+      usage: { input: 25, output: 10, cacheRead: 3 },
+    };
+    write({ type: "message_start", message: finalMessage });
+    write({
+      type: "message_update",
+      message: finalMessage,
+      assistantMessageEvent: {
+        type: "text_delta",
+        contentIndex: 0,
+        delta: assistantText,
+      },
+    });
+    write({ type: "message_end", message: finalMessage });
+    appendMessageEntry("assistant", finalMessage.content);
+    streaming = false;
+    write({ type: "turn_end" });
+    write({ type: "agent_end" });
+    write({ type: "agent_settled" });
+    return;
+  }
   write({
     type: "message_update",
     assistantMessageEvent: {
