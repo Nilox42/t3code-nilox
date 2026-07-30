@@ -111,6 +111,7 @@ interface PiSessionContext {
   readonly assistantBlocks: Map<string, AssistantBlock>;
   turns: Array<PiTurnRecord>;
   activeTurnId: TurnId | undefined;
+  interruptingTurnId: TurnId | undefined;
   finalStopReason: string | undefined;
   toolUses: number;
   stopped: boolean;
@@ -438,6 +439,7 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
         yield* captureLatestUserEntry(ctx, turnId);
         yield* refreshResumeCursor(ctx).pipe(Effect.ignore);
         ctx.activeTurnId = undefined;
+        ctx.interruptingTurnId = undefined;
         ctx.finalStopReason = undefined;
         ctx.assistantBlocks.clear();
         const { activeTurnId: _activeTurnId, ...readySession } = ctx.session;
@@ -795,6 +797,9 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
             return;
           case "agent_settled": {
             if (!turnId) return;
+            if (ctx.interruptingTurnId === turnId) {
+              return yield* settleTurn(ctx, "interrupted", "Turn interrupted by user.");
+            }
             const reason = ctx.finalStopReason;
             if (reason === "aborted") return yield* settleTurn(ctx, "interrupted", "Turn aborted.");
             if (reason === "error")
@@ -1029,6 +1034,7 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
             assistantBlocks: new Map(),
             turns: [],
             activeTurnId: undefined,
+            interruptingTurnId: undefined,
             finalStopReason: undefined,
             toolUses: 0,
             stopped: false,
@@ -1205,8 +1211,14 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
           const turnId = requestedTurnId ?? ctx.activeTurnId;
           if (!turnId || ctx.settledTurns.has(turnId)) return;
           yield* cancelPendingUi(ctx);
-          yield* ctx.runtime.abort();
-          yield* ctx.runtime.waitForSettled().pipe(Effect.orElseSucceed(() => undefined));
+          ctx.interruptingTurnId = turnId;
+          yield* ctx.runtime.abort().pipe(
+            Effect.tapError(() =>
+              Effect.sync(() => {
+                if (ctx.interruptingTurnId === turnId) ctx.interruptingTurnId = undefined;
+              }),
+            ),
+          );
           yield* settleTurn(ctx, "interrupted", "Turn interrupted by user.");
         }).pipe(Effect.mapError((cause) => mapAdapterError("abort", cause))),
       );

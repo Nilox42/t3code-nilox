@@ -206,6 +206,11 @@ interface PendingRequest {
   readonly timer: NodeJS.Timeout;
 }
 
+interface RequestOptions {
+  readonly terminalOnTimeout?: boolean;
+  readonly timeoutMs?: number;
+}
+
 export interface PiRpcSessionRuntime {
   readonly getState: () => Effect.Effect<PiRpcState, PiRpcError>;
   readonly getAvailableModels: () => Effect.Effect<ReadonlyArray<PiModel>, PiRpcError>;
@@ -443,8 +448,16 @@ export const makePiRpcSessionRuntime = Effect.fn("makePiRpcSessionRuntime")(func
     readonly timer: NodeJS.Timeout;
   }>();
   const pending = new Map<string, PendingRequest>();
+  const ignoredResponseIds = new Set<string>();
 
   const boundedStderr = () => stderr.slice(-MAX_STDERR_CHARS);
+  const ignoreLateResponse = (id: string) => {
+    ignoredResponseIds.add(id);
+    const oldest = ignoredResponseIds.values().next().value;
+    if (ignoredResponseIds.size > 32 && oldest !== undefined) {
+      ignoredResponseIds.delete(oldest);
+    }
+  };
   const rejectOutstanding = (error: PiRpcError) => {
     terminalError = error;
     for (const [id, request] of pending) {
@@ -494,6 +507,7 @@ export const makePiRpcSessionRuntime = Effect.fn("makePiRpcSessionRuntime")(func
       }
       const request = pending.get(response.id);
       if (!request) {
+        if (ignoredResponseIds.delete(response.id)) return;
         protocolFailure(`Pi emitted a response for unknown request '${response.id}'.`);
         return;
       }
@@ -575,7 +589,11 @@ export const makePiRpcSessionRuntime = Effect.fn("makePiRpcSessionRuntime")(func
     }
   });
 
-  const request = (command: string, body: Record<string, unknown>): Promise<unknown> => {
+  const request = (
+    command: string,
+    body: Record<string, unknown>,
+    requestOptions: RequestOptions = {},
+  ): Promise<unknown> => {
     if (terminalError) return Promise.reject(terminalError);
     if (closed || !child.stdin.writable) {
       return Promise.reject(
@@ -583,19 +601,25 @@ export const makePiRpcSessionRuntime = Effect.fn("makePiRpcSessionRuntime")(func
       );
     }
     const id = `t3-pi-${++requestSequence}`;
+    const timeoutMs =
+      requestOptions.timeoutMs ?? options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         pending.delete(id);
         const error = asPiRpcError(
           command,
-          `Command timed out after ${options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS}ms.`,
+          `Command timed out after ${timeoutMs}ms.`,
           undefined,
           boundedStderr(),
         );
         reject(error);
+        if (requestOptions.terminalOnTimeout === false) {
+          ignoreLateResponse(id);
+          return;
+        }
         rejectOutstanding(error);
         if (!child.killed) child.kill();
-      }, options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
+      }, timeoutMs);
       pending.set(id, { command, resolve, reject, timer });
       child.stdin.write(`${JSON.stringify({ id, type: command, ...body })}\n`, (cause) => {
         if (!cause) return;
@@ -645,6 +669,51 @@ export const makePiRpcSessionRuntime = Effect.fn("makePiRpcSessionRuntime")(func
           : asPiRpcError("waitForSettled", "Failed waiting for Pi to settle.", cause),
     });
 
+  const abort = () =>
+    Effect.tryPromise({
+      try: () =>
+        new Promise<void>((resolve, reject) => {
+          if (terminalError) {
+            reject(terminalError);
+            return;
+          }
+          const timeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+          let finished = false;
+          const finish = (complete: () => void) => {
+            if (finished) return;
+            finished = true;
+            clearTimeout(waiter.timer);
+            settledWaiters.delete(waiter);
+            complete();
+          };
+          const waiter = {
+            resolve: () => finish(resolve),
+            reject: (error: PiRpcError) => finish(() => reject(error)),
+            timer: setTimeout(() => {
+              const error = asPiRpcError("abort", `Timed out after ${timeoutMs}ms.`);
+              finish(() => {
+                rejectOutstanding(error);
+                if (!child.killed) child.kill();
+                reject(error);
+              });
+            }, timeoutMs),
+          };
+          settledWaiters.add(waiter);
+          void request(
+            "abort",
+            {},
+            { terminalOnTimeout: false, timeoutMs: timeoutMs + 1_000 },
+          ).then(
+            () => finish(resolve),
+            (error: PiRpcError) => finish(() => reject(error)),
+          );
+        }),
+      catch: (cause) =>
+        isPiRpcError(cause)
+          ? cause
+          : asPiRpcError("abort", "Failed aborting the active Pi turn.", cause, boundedStderr()),
+    });
+
   const close = Effect.promise(async () => {
     if (closed) return;
     for (const request of pending.values()) clearTimeout(request.timer);
@@ -679,7 +748,7 @@ export const makePiRpcSessionRuntime = Effect.fn("makePiRpcSessionRuntime")(func
         ...(images && images.length > 0 ? { images } : {}),
         ...(streamingBehavior ? { streamingBehavior } : {}),
       }),
-    abort: () => voidCommand("abort"),
+    abort,
     getEntries: (since) => commandEffect("get_entries", since ? { since } : {}, decodeEntries),
     fork: (entryId) => commandEffect("fork", { entryId }, decodeFork),
     getLastAssistantText: () =>

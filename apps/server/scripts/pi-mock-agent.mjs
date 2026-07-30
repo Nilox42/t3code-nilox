@@ -289,8 +289,13 @@ input.on("line", (line) => {
       break;
     case "abort":
       aborted = true;
-      respond(request);
-      setTimeout(() => write({ type: "agent_settled" }), 2);
+      if (env.T3_PI_MOCK_SETTLE_DURING_ABORT === "1") {
+        write({ type: "agent_settled" });
+        setTimeout(() => respond(request), Number(env.T3_PI_MOCK_ABORT_RESPONSE_DELAY_MS || "20"));
+      } else {
+        respond(request);
+        setTimeout(() => write({ type: "agent_settled" }), 2);
+      }
       break;
     case "get_entries":
       respond(request, { entries, leafId: entries.at(-1)?.id || null });

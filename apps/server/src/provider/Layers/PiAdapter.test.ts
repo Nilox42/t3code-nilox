@@ -13,8 +13,10 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import { describe, expect } from "vite-plus/test";
 
 import { attachmentRelativePath } from "../../attachmentStore.ts";
@@ -217,6 +219,37 @@ describe("PiAdapter lifecycle and event mapping", () => {
       expect(events.filter((event) => event.type === "turn.aborted")).toHaveLength(1);
       expect(events.some((event) => event.type === "turn.completed")).toBe(false);
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("finishes interrupt when Pi settles before the abort response", () =>
+    Effect.gen(function* () {
+      const { adapter } = yield* makeFixture({
+        T3_PI_MOCK_ABORT_RESPONSE_DELAY_MS: "1000",
+        T3_PI_MOCK_PROMPT_DELAY_MS: "1000",
+        T3_PI_MOCK_SETTLE_DURING_ABORT: "1",
+      });
+      const threadId = ThreadId.make("pi-interrupt-settlement-race");
+      yield* adapter.startSession({
+        provider: PI,
+        threadId,
+        cwd: process.cwd(),
+        runtimeMode: "approval-required",
+      });
+      const eventsFiber = yield* collectThrough(adapter.streamEvents, "turn.aborted").pipe(
+        Effect.forkScoped,
+      );
+      yield* Effect.yieldNow;
+      const turn = yield* adapter.sendTurn({ threadId, input: "Wait" });
+
+      const interrupted = yield* adapter
+        .interruptTurn(threadId, turn.turnId)
+        .pipe(Effect.timeoutOption("250 millis"));
+      const events = yield* Fiber.join(eventsFiber);
+
+      expect(Option.isSome(interrupted)).toBe(true);
+      expect(events.filter((event) => event.type === "turn.aborted")).toHaveLength(1);
+      expect(events.some((event) => event.type === "turn.completed")).toBe(false);
+    }).pipe(Effect.scoped, Effect.provide(testLayer), TestClock.withLive),
   );
 
   it.effect("converts T3 image attachments to Pi base64 ImageContent", () =>

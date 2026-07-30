@@ -1,7 +1,9 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as TestClock from "effect/testing/TestClock";
 
 import {
   buildPiManagedArgs,
@@ -146,6 +148,25 @@ describe("Pi RPC JSONL runtime", () => {
       expect(state.sessionId).toBe("pi-mock-session");
       expect(models[0]?.provider).toBe("mock-provider");
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("settles abort before its response and safely ignores a late response", () =>
+    Effect.gen(function* () {
+      const runtime = yield* makeRuntime(
+        {
+          T3_PI_MOCK_ABORT_RESPONSE_DELAY_MS: "2500",
+          T3_PI_MOCK_SETTLE_DURING_ABORT: "1",
+        },
+        1_000,
+      );
+      yield* runtime.getState();
+
+      const aborted = yield* runtime.abort().pipe(Effect.timeoutOption("500 millis"));
+      expect(Option.isSome(aborted)).toBe(true);
+
+      yield* Effect.sleep("2600 millis");
+      expect((yield* runtime.getState()).sessionId).toBe("pi-mock-session");
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer), TestClock.withLive),
   );
 
   it.effect("fails outstanding requests on malformed protocol data", () =>
