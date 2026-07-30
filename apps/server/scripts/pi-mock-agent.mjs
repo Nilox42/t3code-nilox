@@ -54,13 +54,12 @@ const sessionFile =
   "/tmp/t3-pi-mock-session.jsonl";
 const sessionId = env.T3_PI_MOCK_SESSION_ID || "pi-mock-session";
 const eol = env.T3_PI_MOCK_CRLF === "1" ? "\r\n" : "\n";
-const entries = [
-  {
-    id: "pi-user-entry-1",
-    type: "message",
-    message: { role: "user", content: "Mock prompt" },
-  },
-];
+const historyFile = env.T3_PI_MOCK_HISTORY_FILE;
+const entries =
+  historyFile && NodeFS.existsSync(historyFile) && NodeFS.readFileSync(historyFile, "utf8").trim()
+    ? JSON.parse(NodeFS.readFileSync(historyFile, "utf8"))
+    : [];
+let entrySequence = entries.length;
 let heldStateRequest;
 const outputQueue = [];
 let outputWriting = false;
@@ -68,6 +67,25 @@ let outputWriting = false;
 if (!args.includes("--no-session")) {
   NodeFS.mkdirSync(NodePath.dirname(sessionFile), { recursive: true });
   NodeFS.closeSync(NodeFS.openSync(sessionFile, "a"));
+}
+
+function persistHistory() {
+  if (!historyFile) return;
+  NodeFS.mkdirSync(NodePath.dirname(historyFile), { recursive: true });
+  NodeFS.writeFileSync(historyFile, JSON.stringify(entries));
+}
+
+function appendMessageEntry(role, content) {
+  const entry = {
+    id: `pi-${role}-entry-${++entrySequence}`,
+    parentId: entries.at(-1)?.id || null,
+    timestamp: new Date().toISOString(),
+    type: "message",
+    message: { role, content },
+  };
+  entries.push(entry);
+  persistHistory();
+  return entry;
 }
 
 function state() {
@@ -176,6 +194,7 @@ function emitPromptEvents() {
       usage: { input: 20, output: 10, cacheRead: 3 },
     },
   });
+  appendMessageEntry("assistant", [{ type: "text", text: assistantText }]);
   streaming = false;
   write({ type: "turn_end" });
   write({ type: "agent_end" });
@@ -314,6 +333,10 @@ input.on("line", (line) => {
       break;
     case "prompt":
       aborted = false;
+      appendMessageEntry("user", [
+        { type: "text", text: request.message },
+        ...(request.images || []),
+      ]);
       respond(request);
       emitUiRequest();
       setTimeout(emitPromptEvents, Number(env.T3_PI_MOCK_PROMPT_DELAY_MS || 3));

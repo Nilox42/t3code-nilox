@@ -143,6 +143,87 @@ function nonEmpty(value: unknown): string | undefined {
   return trimmed || undefined;
 }
 
+type PiTurnRehydration =
+  | { readonly _tag: "Success"; readonly turns: Array<PiTurnRecord> }
+  | { readonly _tag: "Unsupported"; readonly issue: string };
+
+function rehydratePiTurnRecords(history: {
+  readonly entries: ReadonlyArray<unknown>;
+  readonly leafId: string | null;
+}): PiTurnRehydration {
+  if (history.leafId === null) return { _tag: "Success", turns: [] };
+
+  const entriesById = new Map<string, Record<string, unknown>>();
+  const duplicateIds = new Set<string>();
+  for (const entry of history.entries) {
+    if (!isRecord(entry)) continue;
+    const id = nonEmpty(entry.id);
+    if (!id) continue;
+    if (entriesById.has(id)) duplicateIds.add(id);
+    entriesById.set(id, entry);
+  }
+
+  const branch: Array<Record<string, unknown>> = [];
+  const visited = new Set<string>();
+  let entryId: string | null = history.leafId;
+  while (entryId !== null) {
+    if (visited.has(entryId)) {
+      return {
+        _tag: "Unsupported",
+        issue: `Pi session history cannot be represented safely because entry '${entryId}' forms a parent cycle.`,
+      };
+    }
+    if (duplicateIds.has(entryId)) {
+      return {
+        _tag: "Unsupported",
+        issue: `Pi session history cannot be represented safely because entry id '${entryId}' is duplicated.`,
+      };
+    }
+    const entry = entriesById.get(entryId);
+    if (!entry) {
+      return {
+        _tag: "Unsupported",
+        issue: `Pi session history cannot be represented safely because entry '${entryId}' is missing from the active branch.`,
+      };
+    }
+    visited.add(entryId);
+    branch.push(entry);
+    if (entry.parentId === null) {
+      entryId = null;
+    } else {
+      const parentId = nonEmpty(entry.parentId);
+      if (!parentId) {
+        return {
+          _tag: "Unsupported",
+          issue: `Pi session history entry '${entryId}' cannot be represented safely because its parent cursor is invalid.`,
+        };
+      }
+      entryId = parentId;
+    }
+  }
+
+  const turns: Array<PiTurnRecord> = [];
+  for (const entry of branch.reverse()) {
+    if (entry.type !== "message") continue;
+    const id = nonEmpty(entry.id);
+    const message = entry.message;
+    if (!id || !isRecord(message) || typeof message.role !== "string") {
+      return {
+        _tag: "Unsupported",
+        issue: `Pi session history entry '${id ?? "<unknown>"}' cannot be represented safely because its message payload is invalid.`,
+      };
+    }
+    if (message.role === "user") {
+      turns.push({
+        id: TurnId.make(id),
+        items: [],
+        userEntryId: id,
+      });
+    }
+  }
+  return { _tag: "Success", turns };
+}
+
 function toolItemType(toolName: string): "command_execution" | "file_change" | "dynamic_tool_call" {
   if (toolName === "bash") return "command_execution";
   if (toolName === "edit" || toolName === "write") return "file_change";
@@ -1004,6 +1085,29 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
               detail: "Pi did not create a persistent session file.",
             });
           }
+          let turns: Array<PiTurnRecord> = [];
+          if (resumeCursor) {
+            const history = yield* runtime.getEntries().pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ProviderAdapterProcessError({
+                    provider: PROVIDER,
+                    threadId: input.threadId,
+                    detail: cause.message,
+                    cause,
+                  }),
+              ),
+            );
+            const rehydrated = rehydratePiTurnRecords(history);
+            if (rehydrated._tag === "Unsupported") {
+              return yield* new ProviderAdapterValidationError({
+                provider: PROVIDER,
+                operation: "startSession",
+                issue: rehydrated.issue,
+              });
+            }
+            turns = rehydrated.turns;
+          }
 
           const now = DateTime.formatIso(yield* DateTime.now);
           const session: ProviderSession = {
@@ -1034,7 +1138,7 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
             unsubscribeExit: undefined,
             pendingUi: new Map(),
             assistantBlocks: new Map(),
-            turns: [],
+            turns,
             activeTurnId: undefined,
             interruptingTurnId: undefined,
             finalStopReason: undefined,

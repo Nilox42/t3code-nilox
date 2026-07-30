@@ -357,6 +357,119 @@ describe("PiAdapter lifecycle and event mapping", () => {
       }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
+  it.effect(
+    "rehydrates stable rollback targets from durable history after context recreation",
+    () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const historyDir = yield* fileSystem.makeTempDirectory({ prefix: "pi-resume-history-" });
+        const historyFile = path.join(historyDir, "entries.json");
+        const requestLog = path.join(historyDir, "requests.jsonl");
+        const { adapter } = yield* makeFixture({
+          T3_PI_MOCK_HISTORY_FILE: historyFile,
+          T3_PI_MOCK_REQUEST_LOG: requestLog,
+        });
+        const threadId = ThreadId.make("pi-rehydrated-rollback");
+        const started = yield* adapter.startSession({
+          provider: PI,
+          threadId,
+          cwd: process.cwd(),
+          runtimeMode: "full-access",
+        });
+        const resumeCursor = started.resumeCursor;
+        if (!resumeCursor) throw new Error("Expected Pi to return a resume cursor.");
+
+        for (const input of ["First durable turn", "Second durable turn"]) {
+          const settled = yield* collectThrough(adapter.streamEvents, "turn.completed").pipe(
+            Effect.forkScoped,
+          );
+          yield* Effect.yieldNow;
+          yield* adapter.sendTurn({ threadId, input });
+          yield* Fiber.join(settled);
+          for (let attempt = 0; attempt < 100; attempt += 1) {
+            const current = (yield* adapter.listSessions()).find(
+              (candidate) => candidate.threadId === threadId,
+            );
+            if (current?.status === "ready") break;
+            yield* Effect.sleep("5 millis");
+          }
+        }
+
+        expect((yield* adapter.readThread(threadId)).turns).toHaveLength(2);
+        yield* adapter.stopSession(threadId);
+        yield* adapter.startSession({
+          provider: PI,
+          threadId,
+          cwd: process.cwd(),
+          runtimeMode: "full-access",
+          resumeCursor,
+        });
+
+        const firstResume = yield* adapter.readThread(threadId);
+        expect(firstResume.turns.map((turn) => turn.id)).toEqual([
+          "pi-user-entry-1",
+          "pi-user-entry-3",
+        ]);
+
+        yield* adapter.stopSession(threadId);
+        yield* adapter.startSession({
+          provider: PI,
+          threadId,
+          cwd: process.cwd(),
+          runtimeMode: "full-access",
+          resumeCursor,
+        });
+        const secondResume = yield* adapter.readThread(threadId);
+        expect(secondResume.turns.map((turn) => turn.id)).toEqual(
+          firstResume.turns.map((turn) => turn.id),
+        );
+
+        const rolledBack = yield* adapter.rollbackThread(threadId, 1);
+        expect(rolledBack.turns.map((turn) => turn.id)).toEqual(["pi-user-entry-1"]);
+        const requests = (yield* fileSystem.readFileString(requestLog))
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line) as { request: Record<string, unknown> });
+        const fork = requests.findLast((entry) => entry.request.type === "fork");
+        expect(fork?.request.entryId).toBe("pi-user-entry-3");
+      }).pipe(Effect.scoped, Effect.provide(testLayer), TestClock.withLive),
+  );
+
+  it.effect("rejects resumed active history that cannot be represented safely", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const historyDir = yield* fileSystem.makeTempDirectory({ prefix: "pi-invalid-history-" });
+      const historyFile = path.join(historyDir, "entries.json");
+      yield* fileSystem.writeFileString(
+        historyFile,
+        '[{"id":"broken-user","parentId":null,"timestamp":"2026-07-30T00:00:00.000Z","type":"message","message":{"content":"missing role"}}]',
+      );
+      const { adapter, sessionFile } = yield* makeFixture({
+        T3_PI_MOCK_HISTORY_FILE: historyFile,
+      });
+      const threadId = ThreadId.make("pi-invalid-resumed-history");
+
+      const error = yield* Effect.flip(
+        adapter.startSession({
+          provider: PI,
+          threadId,
+          cwd: process.cwd(),
+          runtimeMode: "full-access",
+          resumeCursor: {
+            schemaVersion: 1,
+            sessionFile,
+            sessionId: "pi-mock-session",
+          },
+        }),
+      );
+
+      expect(error.message).toMatch(/broken-user.*cannot be represented safely/i);
+      expect(yield* adapter.hasSession(threadId)).toBe(false);
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
   it.effect("interrupts through abort and completes the turn exactly once", () =>
     Effect.gen(function* () {
       const { adapter } = yield* makeFixture({ T3_PI_MOCK_PROMPT_DELAY_MS: "250" });
