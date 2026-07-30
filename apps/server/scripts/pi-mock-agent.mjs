@@ -98,7 +98,7 @@ function state() {
     followUpMode: "one-at-a-time",
     sessionFile,
     sessionId,
-    sessionName: "Mock Pi session",
+    sessionName: env.T3_PI_MOCK_SESSION_NAME || "Mock Pi session",
     autoCompactionEnabled: true,
     messageCount: entries.length,
     pendingMessageCount: 0,
@@ -166,8 +166,61 @@ function mockUsage(prefix, defaults) {
   };
 }
 
+function mockToolArgs() {
+  return env.T3_PI_MOCK_MCP_SERVER ? { interactiveOnly: true } : { path: "README.md" };
+}
+
+function mockToolResult(text) {
+  return {
+    content: [{ type: "text", text }],
+    ...(env.T3_PI_MOCK_MCP_SERVER
+      ? {
+          details: {
+            server: env.T3_PI_MOCK_MCP_SERVER,
+            tool: env.T3_PI_MOCK_MCP_TOOL || "preview_status",
+          },
+        }
+      : {}),
+  };
+}
+
+function emitMetadataEvents() {
+  if (env.T3_PI_MOCK_SESSION_NAME_EVENT) {
+    write({
+      type: "session_info_changed",
+      name: env.T3_PI_MOCK_SESSION_NAME_EVENT,
+    });
+  }
+  if (env.T3_PI_MOCK_MCP_STATUS === "1") {
+    const snapshot = {
+      version: 1,
+      servers: [
+        {
+          name: env.T3_PI_MOCK_MCP_SERVER || "t3-code",
+          status: "connected",
+          toolCount: 12,
+          resourceCount: 0,
+          disabled: false,
+        },
+      ],
+      totalTools: 12,
+      totalResources: 0,
+      connectedCount: 1,
+      disabledCount: 0,
+    };
+    write({
+      type: "extension_ui_request",
+      id: "pi-mcp-status",
+      method: "setStatus",
+      statusKey: "t3-mcp-status",
+      statusText: `__T3_PI_MCP_STATUS_V1__:${JSON.stringify(snapshot)}`,
+    });
+  }
+}
+
 function emitPromptEvents() {
   streaming = true;
+  emitMetadataEvents();
   write({ type: "agent_start" });
   write({ type: "turn_start" });
   if (env.T3_PI_MOCK_MULTI_MESSAGE === "1") {
@@ -208,14 +261,14 @@ function emitPromptEvents() {
       type: "tool_execution_start",
       toolCallId: "pi-tool-1",
       toolName: env.T3_PI_MOCK_TOOL || "read",
-      args: { path: "README.md" },
+      args: mockToolArgs(),
     });
     write({
       type: "tool_execution_end",
       toolCallId: "pi-tool-1",
       toolName: env.T3_PI_MOCK_TOOL || "read",
-      args: { path: "README.md" },
-      result: { content: [{ type: "text", text: "Done" }] },
+      args: mockToolArgs(),
+      result: mockToolResult("Done"),
       isError: false,
     });
     const toolResultMessage = {
@@ -268,21 +321,21 @@ function emitPromptEvents() {
     type: "tool_execution_start",
     toolCallId: "pi-tool-1",
     toolName: env.T3_PI_MOCK_TOOL || "read",
-    args: { path: "README.md" },
+    args: mockToolArgs(),
   });
   write({
     type: "tool_execution_update",
     toolCallId: "pi-tool-1",
     toolName: env.T3_PI_MOCK_TOOL || "read",
-    args: { path: "README.md" },
-    partialResult: { content: [{ type: "text", text: "Reading" }] },
+    args: mockToolArgs(),
+    partialResult: mockToolResult("Reading"),
   });
   write({
     type: "tool_execution_end",
     toolCallId: "pi-tool-1",
     toolName: env.T3_PI_MOCK_TOOL || "read",
-    args: { path: "README.md" },
-    result: { content: [{ type: "text", text: "Done" }] },
+    args: mockToolArgs(),
+    result: mockToolResult("Done"),
     isError: false,
   });
   write({

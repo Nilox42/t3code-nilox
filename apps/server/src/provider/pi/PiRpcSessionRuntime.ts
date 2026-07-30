@@ -100,6 +100,7 @@ const PI_RPC_EVENT_TYPES = [
   "tool_execution_update",
   "tool_execution_end",
   "queue_update",
+  "session_info_changed",
   "compaction_start",
   "compaction_end",
   "auto_retry_start",
@@ -126,6 +127,7 @@ const PiRpcEventEnvelope = Schema.Struct({
   result: Schema.optionalKey(Schema.Unknown),
   isError: OptionalBoolean,
   messages: Schema.optionalKey(Schema.Unknown),
+  name: OptionalString,
   willRetry: OptionalBoolean,
   reason: OptionalString,
   error: OptionalString,
@@ -141,6 +143,8 @@ const PiRpcEventEnvelope = Schema.Struct({
   placeholder: OptionalString,
   prefill: OptionalString,
   notifyType: OptionalString,
+  statusKey: OptionalString,
+  statusText: OptionalString,
 });
 export type PiRpcEvent = typeof PiRpcEventEnvelope.Type;
 

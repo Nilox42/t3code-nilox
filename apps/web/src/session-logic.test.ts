@@ -934,6 +934,31 @@ describe("deriveWorkLogEntries", () => {
     expect(entry?.toolLifecycleStatus).toBe("completed");
   });
 
+  it("presents MCP lifecycle status with its connection summary and server detail", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "mcp-status",
+        kind: "mcp.status.updated",
+        summary: "MCP: 1/2 connected",
+        tone: "info",
+        payload: {
+          detail: "t3-code: connected (12 tools)\ndocs: needs-auth (3 tools)",
+          status: {
+            version: 1,
+            connectedCount: 1,
+          },
+        },
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities);
+    expect(entry).toMatchObject({
+      label: "MCP: 1/2 connected",
+      detail: "t3-code: connected (12 tools)\ndocs: needs-auth (3 tools)",
+      sourceActivityKind: "mcp.status.updated",
+    });
+  });
+
   it("preserves MCP server, tool, arguments, and results for expanded display", () => {
     const item = {
       type: "mcpToolCall",

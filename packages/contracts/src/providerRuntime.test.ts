@@ -181,4 +181,56 @@ describe("ProviderRuntimeEvent", () => {
     expect(parsed.payload.usage.maxTokens).toBe(200000);
     expect(parsed.payload.usage.usedTokens).toBe(31251);
   });
+
+  it("decodes sanitized MCP lifecycle snapshots without retaining secret fields", () => {
+    const parsed = decodeRuntimeEvent({
+      type: "mcp.status.updated",
+      eventId: "event-mcp-status-1",
+      provider: "piAgent",
+      createdAt: "2026-02-28T00:00:05.000Z",
+      threadId: "thread-1",
+      payload: {
+        status: {
+          version: 1,
+          servers: [
+            {
+              name: "t3-code",
+              status: "connected",
+              toolCount: 12,
+              resourceCount: 0,
+              disabled: false,
+              bearerToken: "must-not-survive",
+              url: "https://secret.example/mcp",
+            },
+          ],
+          totalTools: 12,
+          totalResources: 0,
+          connectedCount: 1,
+          disabledCount: 0,
+          credentials: "must-not-survive",
+        },
+      },
+    });
+
+    expect(parsed.type).toBe("mcp.status.updated");
+    if (parsed.type !== "mcp.status.updated") {
+      throw new Error("expected mcp.status.updated");
+    }
+    expect(parsed.payload.status).toEqual({
+      version: 1,
+      servers: [
+        {
+          name: "t3-code",
+          status: "connected",
+          toolCount: 12,
+          resourceCount: 0,
+          disabled: false,
+        },
+      ],
+      totalTools: 12,
+      totalResources: 0,
+      connectedCount: 1,
+      disabledCount: 0,
+    });
+  });
 });

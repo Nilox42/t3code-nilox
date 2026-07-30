@@ -44,7 +44,10 @@ import * as RepositoryIdentityResolver from "../../project/RepositoryIdentityRes
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
-import { ProviderRuntimeIngestionLive } from "./ProviderRuntimeIngestion.ts";
+import {
+  ProviderRuntimeIngestionLive,
+  runtimeEventToActivities,
+} from "./ProviderRuntimeIngestion.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
@@ -62,6 +65,48 @@ const asEventId = (value: string): EventId => EventId.make(value);
 const asMessageId = (value: string): MessageId => MessageId.make(value);
 const asThreadId = (value: string): ThreadId => ThreadId.make(value);
 const asTurnId = (value: string): TurnId => TurnId.make(value);
+
+it("presents normalized MCP status snapshots as thread activity", () => {
+  const [activity] = runtimeEventToActivities({
+    type: "mcp.status.updated",
+    eventId: asEventId("event-mcp-status"),
+    provider: ProviderDriverKind.make("piAgent"),
+    createdAt: "2026-02-28T00:00:05.000Z",
+    threadId: asThreadId("thread-mcp"),
+    payload: {
+      status: {
+        version: 1,
+        servers: [
+          {
+            name: "t3-code",
+            status: "connected",
+            toolCount: 12,
+            resourceCount: 0,
+            disabled: false,
+          },
+          {
+            name: "docs",
+            status: "needs-auth",
+            toolCount: 3,
+            disabled: false,
+          },
+        ],
+        totalTools: 15,
+        totalResources: 0,
+        connectedCount: 1,
+        disabledCount: 0,
+      },
+    },
+  });
+
+  expect(activity).toMatchObject({
+    kind: "mcp.status.updated",
+    summary: "MCP: 1/2 connected",
+    payload: {
+      detail: "t3-code: connected (12 tools)\ndocs: needs-auth (3 tools)",
+    },
+  });
+});
 
 type LegacyProviderRuntimeEvent = {
   readonly type: string;

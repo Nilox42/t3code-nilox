@@ -1,6 +1,7 @@
 import {
   ApprovalRequestId,
   EventId,
+  McpStatusSnapshot,
   type PiSettings,
   type ProviderApprovalDecision,
   type ProviderRuntimeEvent,
@@ -46,7 +47,10 @@ import {
   PI_MCP_ENDPOINT_ENV,
   type PiMcpBridgeCapability,
 } from "../pi/PiMcpBridge.ts";
-import { PI_PERMISSION_BRIDGE_MARKER } from "../pi/PiPermissionBridge.ts";
+import {
+  PI_MCP_STATUS_BRIDGE_MARKER,
+  PI_PERMISSION_BRIDGE_MARKER,
+} from "../pi/PiPermissionBridge.ts";
 import {
   clampPiThinkingLevel,
   makePiRpcSessionRuntime,
@@ -60,6 +64,7 @@ import type { PiAdapterShape } from "../Services/PiAdapter.ts";
 
 const PROVIDER = ProviderDriverKind.make("piAgent");
 const isResumeCursor = Schema.is(PiRpcResumeCursorSchema);
+const decodeMcpStatusSnapshot = Schema.decodeUnknownSync(McpStatusSnapshot);
 const isAdapterProcessError = Schema.is(ProviderAdapterProcessError);
 const isAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isAdapterSessionClosedError = Schema.is(ProviderAdapterSessionClosedError);
@@ -124,6 +129,7 @@ interface PiSessionContext {
   activeTurnId: TurnId | undefined;
   interruptingTurnId: TurnId | undefined;
   finalStopReason: string | undefined;
+  readonly mcpServerNames: Set<string>;
   toolUses: number;
   stopped: boolean;
   settledTurns: Set<TurnId>;
@@ -241,6 +247,83 @@ function toolItemType(toolName: string): "command_execution" | "file_change" | "
   return "dynamic_tool_call";
 }
 
+interface PiMcpToolIdentity {
+  readonly server: string;
+  readonly tool: string;
+  readonly arguments: unknown;
+}
+
+function directMcpToolIdentity(
+  toolName: string,
+  args: unknown,
+  serverNames: ReadonlySet<string>,
+): PiMcpToolIdentity | undefined {
+  const candidates = [...serverNames]
+    .flatMap((server) => {
+      const normalized = server.replaceAll("-", "_");
+      const short = server.replace(/-?mcp$/i, "").replaceAll("-", "_") || "mcp";
+      return [
+        { server, prefix: `${normalized}_` },
+        { server, prefix: `${short}_` },
+        { server, prefix: `mcp__${normalized}_` },
+      ];
+    })
+    .sort((left, right) => right.prefix.length - left.prefix.length);
+  const match = candidates.find((candidate) => toolName.startsWith(candidate.prefix));
+  if (!match) return undefined;
+  const tool = nonEmpty(toolName.slice(match.prefix.length));
+  return tool ? { server: match.server, tool, arguments: args } : undefined;
+}
+
+function mcpToolIdentity(
+  toolName: string,
+  args: unknown,
+  result: unknown,
+  serverNames: ReadonlySet<string>,
+): PiMcpToolIdentity | undefined {
+  const argsRecord = isRecord(args) ? args : undefined;
+  const resultRecord = isRecord(result) ? result : undefined;
+  const details = isRecord(resultRecord?.details) ? resultRecord.details : undefined;
+  const resultServer = nonEmpty(details?.server);
+  const resultTool = nonEmpty(details?.tool);
+  if (resultServer && resultTool) {
+    return {
+      server: resultServer,
+      tool: resultTool,
+      arguments: toolName === "mcp" ? argsRecord?.args : args,
+    };
+  }
+  if (toolName === "mcp") {
+    const server = nonEmpty(argsRecord?.server) ?? resultServer;
+    const tool = nonEmpty(argsRecord?.tool) ?? resultTool;
+    return server && tool
+      ? {
+          server,
+          tool,
+          arguments: argsRecord?.args,
+        }
+      : undefined;
+  }
+  return directMcpToolIdentity(toolName, args, serverNames);
+}
+
+function mcpToolItem(
+  toolCallId: string,
+  identity: PiMcpToolIdentity,
+  status: "inProgress" | "completed" | "failed",
+  result?: unknown,
+) {
+  return {
+    type: "mcpToolCall",
+    id: toolCallId,
+    server: identity.server,
+    tool: identity.tool,
+    arguments: identity.arguments,
+    status,
+    ...(result !== undefined ? { result } : {}),
+  };
+}
+
 function toolRequestType(
   toolName: string,
 ):
@@ -280,6 +363,17 @@ function parseBridgeMarker(title: string | undefined):
       category: typeof decoded.category === "string" ? decoded.category : "custom",
       input: decoded.input,
     };
+  } catch {
+    return undefined;
+  }
+}
+
+function parseMcpStatusMarker(statusText: string | undefined) {
+  if (!statusText?.startsWith(PI_MCP_STATUS_BRIDGE_MARKER)) return undefined;
+  try {
+    return decodeMcpStatusSnapshot(
+      JSON.parse(statusText.slice(PI_MCP_STATUS_BRIDGE_MARKER.length)),
+    );
   } catch {
     return undefined;
   }
@@ -650,8 +744,23 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
       Effect.gen(function* () {
         const piRequestId = event.id;
         if (!piRequestId || !event.method) return;
-        if (["setStatus", "setWidget", "setTitle", "set_editor_text"].includes(event.method))
+        if (event.method === "setStatus") {
+          const status = parseMcpStatusMarker(event.statusText);
+          if (event.statusKey === "t3-mcp-status" && status) {
+            ctx.mcpServerNames.clear();
+            for (const server of status.servers) ctx.mcpServerNames.add(server.name);
+            yield* offer({
+              type: "mcp.status.updated",
+              ...(yield* stamp),
+              ...baseEvent(ctx),
+              turnId: ctx.activeTurnId,
+              payload: { status },
+              ...raw(rawPayload, "extension_ui_request"),
+            });
+          }
           return;
+        }
+        if (["setWidget", "setTitle", "set_editor_text"].includes(event.method)) return;
         if (event.method === "notify") {
           const message = nonEmpty(event.message);
           if (message) {
@@ -752,6 +861,25 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
         }
         const turnId = ctx.activeTurnId;
         switch (event.type) {
+          case "session_info_changed": {
+            const name = nonEmpty(event.name);
+            yield* offer({
+              type: "thread.metadata.updated",
+              ...(yield* stamp),
+              ...baseEvent(ctx),
+              payload: {
+                ...(name ? { name } : {}),
+                metadata: {
+                  ...(isResumeCursor(ctx.session.resumeCursor)
+                    ? { sessionId: ctx.session.resumeCursor.sessionId }
+                    : {}),
+                  sessionName: name ?? null,
+                },
+              },
+              ...raw(rawPayload, event.type),
+            });
+            return;
+          }
           case "agent_start":
             if (!turnId) return;
             ctx.session = {
@@ -838,9 +966,24 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
           case "tool_execution_start": {
             if (!turnId || !event.toolCallId || !event.toolName) return;
             ctx.toolUses += 1;
+            const mcpIdentity = mcpToolIdentity(
+              event.toolName,
+              event.args,
+              undefined,
+              ctx.mcpServerNames,
+            );
+            const itemType = mcpIdentity ? "mcp_tool_call" : toolItemType(event.toolName);
+            const title = mcpIdentity
+              ? `${mcpIdentity.server} · ${mcpIdentity.tool}`
+              : event.toolName;
+            const data = mcpIdentity
+              ? {
+                  item: mcpToolItem(event.toolCallId, mcpIdentity, "inProgress"),
+                }
+              : { args: event.args };
             const item = {
               id: event.toolCallId,
-              type: toolItemType(event.toolName),
+              type: itemType,
               toolName: event.toolName,
               args: event.args,
             };
@@ -852,10 +995,10 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
               turnId,
               itemId: RuntimeItemId.make(event.toolCallId),
               payload: {
-                itemType: toolItemType(event.toolName),
+                itemType,
                 status: "inProgress",
-                title: event.toolName,
-                data: { args: event.args },
+                title,
+                data,
               },
               ...raw(rawPayload, event.type),
             });
@@ -867,6 +1010,27 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
             const result =
               event.type === "tool_execution_update" ? event.partialResult : event.result;
             const detail = extractResultText(result);
+            const mcpIdentity = mcpToolIdentity(
+              event.toolName,
+              event.args,
+              result,
+              ctx.mcpServerNames,
+            );
+            const itemType = mcpIdentity ? "mcp_tool_call" : toolItemType(event.toolName);
+            const status =
+              event.type === "tool_execution_end"
+                ? event.isError
+                  ? "failed"
+                  : "completed"
+                : "inProgress";
+            const title = mcpIdentity
+              ? `${mcpIdentity.server} · ${mcpIdentity.tool}`
+              : event.toolName;
+            const data = mcpIdentity
+              ? {
+                  item: mcpToolItem(event.toolCallId, mcpIdentity, status, result),
+                }
+              : { args: event.args, result };
             yield* offer({
               type: event.type === "tool_execution_end" ? "item.completed" : "item.updated",
               ...(yield* stamp),
@@ -874,16 +1038,11 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
               turnId,
               itemId: RuntimeItemId.make(event.toolCallId),
               payload: {
-                itemType: toolItemType(event.toolName),
-                status:
-                  event.type === "tool_execution_end"
-                    ? event.isError
-                      ? "failed"
-                      : "completed"
-                    : "inProgress",
-                title: event.toolName,
+                itemType,
+                status,
+                title,
                 ...(detail ? { detail } : {}),
-                data: { args: event.args, result },
+                data,
               },
               ...raw(rawPayload, event.type),
             });
@@ -1206,6 +1365,7 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
             activeTurnId: undefined,
             interruptingTurnId: undefined,
             finalStopReason: undefined,
+            mcpServerNames: new Set(mcpBridgeEnabled ? ["t3-code"] : []),
             toolUses: 0,
             stopped: false,
             settledTurns: new Set(),
@@ -1235,6 +1395,21 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
             ...baseEvent(ctx),
             payload: { providerThreadId: state.sessionId },
           });
+          const sessionName = nonEmpty(state.sessionName);
+          if (sessionName) {
+            yield* offer({
+              type: "thread.metadata.updated",
+              ...(yield* stamp),
+              ...baseEvent(ctx),
+              payload: {
+                name: sessionName,
+                metadata: {
+                  sessionId: state.sessionId,
+                  sessionName,
+                },
+              },
+            });
+          }
           if (input.runtimeMode === "auto") {
             yield* offer({
               type: "runtime.warning",

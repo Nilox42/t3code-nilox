@@ -2,11 +2,15 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
-export const PI_PERMISSION_BRIDGE_VERSION = 2;
+export const PI_PERMISSION_BRIDGE_VERSION = 3;
 export const PI_PERMISSION_BRIDGE_MARKER = "__T3_PI_APPROVAL_V1__:";
+export const PI_MCP_STATUS_BRIDGE_MARKER = "__T3_PI_MCP_STATUS_V1__:";
 
 export const PI_PERMISSION_BRIDGE_SOURCE = `
 const MARKER = ${JSON.stringify(PI_PERMISSION_BRIDGE_MARKER)};
+const MCP_STATUS_MARKER = ${JSON.stringify(PI_MCP_STATUS_BRIDGE_MARKER)};
+const MCP_STATUS_EVENT = "pi-mcp-adapter/status/v1";
+const MCP_STATUS_KEY = "t3-mcp-status";
 const MCP_GUIDANCE = \`
 T3 Code collaborative browser tools are available through the t3-code MCP server.
 Use t3_code_preview_status first. If no automation-capable preview is attached, use
@@ -16,10 +20,84 @@ If direct preview tools are not visible, use the mcp tool to search for "preview
 \`;
 const READ_TOOLS = new Set(["read", "grep", "find", "ls"]);
 const EDIT_TOOLS = new Set(["edit", "write"]);
+const MCP_SERVER_STATUSES = new Set([
+  "connected",
+  "cached",
+  "failed",
+  "needs-auth",
+  "not-connected",
+  "disabled",
+]);
+
+function nonNegativeInteger(value) {
+  return Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
+function sanitizeMcpStatus(snapshot) {
+  if (!snapshot || typeof snapshot !== "object" || !Array.isArray(snapshot.servers)) {
+    return undefined;
+  }
+  const version = nonNegativeInteger(snapshot.version);
+  const totalTools = nonNegativeInteger(snapshot.totalTools);
+  const totalResources = nonNegativeInteger(snapshot.totalResources);
+  const connectedCount = nonNegativeInteger(snapshot.connectedCount);
+  const disabledCount = nonNegativeInteger(snapshot.disabledCount);
+  if (!version || totalTools === undefined || totalResources === undefined ||
+      connectedCount === undefined || disabledCount === undefined) {
+    return undefined;
+  }
+  const servers = [];
+  for (const server of snapshot.servers) {
+    if (!server || typeof server !== "object") return undefined;
+    const name = typeof server.name === "string" ? server.name.trim() : "";
+    const status = server.status;
+    const toolCount = nonNegativeInteger(server.toolCount);
+    if (!name || !MCP_SERVER_STATUSES.has(status) || toolCount === undefined ||
+        typeof server.disabled !== "boolean") {
+      return undefined;
+    }
+    const resourceCount = nonNegativeInteger(server.resourceCount);
+    const failedAgoSeconds = nonNegativeInteger(server.failedAgoSeconds);
+    servers.push({
+      name,
+      status,
+      toolCount,
+      ...(resourceCount !== undefined ? { resourceCount } : {}),
+      ...(failedAgoSeconds !== undefined ? { failedAgoSeconds } : {}),
+      disabled: server.disabled,
+    });
+  }
+  return {
+    version,
+    servers,
+    totalTools,
+    totalResources,
+    connectedCount,
+    disabledCount,
+  };
+}
 
 export default function (pi) {
   const approvedCategories = new Set();
-  pi.on("before_agent_start", async (event) => {
+  let sessionContext;
+  let latestMcpStatus;
+  const publishMcpStatus = (snapshot) => {
+    const sanitized = sanitizeMcpStatus(snapshot);
+    if (!sanitized) return;
+    latestMcpStatus = sanitized;
+    sessionContext?.ui.setStatus(
+      MCP_STATUS_KEY,
+      MCP_STATUS_MARKER + JSON.stringify(sanitized),
+    );
+  };
+  pi.events?.on?.(MCP_STATUS_EVENT, publishMcpStatus);
+  pi.on("session_start", async (_event, ctx) => {
+    sessionContext = ctx;
+    if (latestMcpStatus) publishMcpStatus(latestMcpStatus);
+  });
+  pi.on("before_agent_start", async (event, ctx) => {
+    sessionContext = ctx;
+    if (latestMcpStatus) publishMcpStatus(latestMcpStatus);
     if (process.env.T3_PI_MCP_BRIDGE_ENABLED !== "1") return undefined;
     return { systemPrompt: event.systemPrompt + "\\n\\n" + MCP_GUIDANCE.trim() };
   });

@@ -613,6 +613,35 @@ export function runtimeEventToActivities(
       ];
     }
 
+    case "mcp.status.updated": {
+      const status = event.payload.status;
+      const enabledServers = status.servers.filter((server) => !server.disabled);
+      const detail =
+        status.servers.length > 0
+          ? status.servers
+              .map(
+                (server) =>
+                  `${server.name}: ${server.status} (${server.toolCount} tool${server.toolCount === 1 ? "" : "s"})`,
+              )
+              .join("\n")
+          : "No MCP servers are configured.";
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: "info",
+          kind: "mcp.status.updated",
+          summary: `MCP: ${status.connectedCount}/${enabledServers.length} connected`,
+          payload: {
+            status,
+            detail,
+          },
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
     case "item.updated": {
       if (!isToolLifecycleItemType(event.payload.itemType)) {
         return [];

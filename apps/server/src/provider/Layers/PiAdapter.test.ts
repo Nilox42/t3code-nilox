@@ -331,6 +331,119 @@ describe("PiAdapter lifecycle and event mapping", () => {
       }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
+  it.effect("publishes the initial Pi session name as thread metadata", () =>
+    Effect.gen(function* () {
+      const { adapter } = yield* makeFixture({
+        T3_PI_MOCK_SESSION_NAME: "Named Pi session",
+      });
+      const threadId = ThreadId.make("pi-session-name");
+      const metadataFiber = yield* Stream.runHead(
+        Stream.filter(adapter.streamEvents, (event) => event.type === "thread.metadata.updated"),
+      ).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+
+      yield* adapter.startSession({
+        provider: PI,
+        threadId,
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      const metadata = yield* Fiber.join(metadataFiber);
+
+      expect(metadata._tag).toBe("Some");
+      if (metadata._tag === "Some" && metadata.value.type === "thread.metadata.updated") {
+        expect(metadata.value.payload).toEqual({
+          name: "Named Pi session",
+          metadata: {
+            sessionId: "pi-mock-session",
+            sessionName: "Named Pi session",
+          },
+        });
+      }
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("maps Pi session changes, MCP status, and stable MCP tool identity", () =>
+    Effect.gen(function* () {
+      const { adapter } = yield* makeFixture({
+        T3_PI_MOCK_SESSION_NAME_EVENT: "Renamed Pi session",
+        T3_PI_MOCK_MCP_STATUS: "1",
+        T3_PI_MOCK_MCP_SERVER: "t3-code",
+        T3_PI_MOCK_MCP_TOOL: "preview_status",
+        T3_PI_MOCK_TOOL: "t3_code_preview_status",
+      });
+      const threadId = ThreadId.make("pi-mcp-lifecycle");
+      yield* adapter.startSession({
+        provider: PI,
+        threadId,
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+
+      const eventsFiber = yield* collectThrough(adapter.streamEvents, "turn.completed").pipe(
+        Effect.forkScoped,
+      );
+      yield* Effect.yieldNow;
+      yield* adapter.sendTurn({ threadId, input: "Inspect the preview", attachments: [] });
+      const events = yield* Fiber.join(eventsFiber);
+
+      const metadata = events.find((event) => event.type === "thread.metadata.updated");
+      expect(metadata?.payload).toMatchObject({
+        name: "Renamed Pi session",
+        metadata: {
+          sessionName: "Renamed Pi session",
+        },
+      });
+
+      const mcpStatus = events.find((event) => event.type === "mcp.status.updated");
+      expect(mcpStatus?.payload).toEqual({
+        status: {
+          version: 1,
+          servers: [
+            {
+              name: "t3-code",
+              status: "connected",
+              toolCount: 12,
+              resourceCount: 0,
+              disabled: false,
+            },
+          ],
+          totalTools: 12,
+          totalResources: 0,
+          connectedCount: 1,
+          disabledCount: 0,
+        },
+      });
+
+      const mcpItems = events.filter(
+        (event) =>
+          (event.type === "item.started" ||
+            event.type === "item.updated" ||
+            event.type === "item.completed") &&
+          event.payload.itemType === "mcp_tool_call",
+      );
+      expect(mcpItems).toHaveLength(3);
+      const completed = mcpItems.find((event) => event.type === "item.completed");
+      expect(completed?.payload).toMatchObject({
+        itemType: "mcp_tool_call",
+        status: "completed",
+        title: "t3-code · preview_status",
+        data: {
+          item: {
+            type: "mcpToolCall",
+            id: "pi-tool-1",
+            server: "t3-code",
+            tool: "preview_status",
+            arguments: { interactiveOnly: true },
+            status: "completed",
+          },
+        },
+      });
+
+      yield* adapter.stopSession(threadId);
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
   it.effect("maps cache reads and writes into the shared token usage contract", () =>
     Effect.gen(function* () {
       const { adapter } = yield* makeFixture({
