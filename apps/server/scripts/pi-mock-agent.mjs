@@ -133,6 +133,13 @@ function write(record) {
   writeRaw(`${JSON.stringify(record)}${eol}`);
 }
 
+if (env.T3_PI_MOCK_STARTUP_EXTENSION_ERROR) {
+  write({
+    type: "extension_error",
+    error: env.T3_PI_MOCK_STARTUP_EXTENSION_ERROR,
+  });
+}
+
 function respond(request, data, extra = {}) {
   write({
     id: request.id,
@@ -404,6 +411,7 @@ function emitUiRequest() {
     title: `Mock ${method} request`,
     message: method === "confirm" ? "Continue?" : undefined,
     options: method === "select" ? ["Alpha", "Beta"] : undefined,
+    timeout: env.T3_PI_MOCK_UI_TIMEOUT_MS ? Number(env.T3_PI_MOCK_UI_TIMEOUT_MS) : undefined,
   });
 }
 

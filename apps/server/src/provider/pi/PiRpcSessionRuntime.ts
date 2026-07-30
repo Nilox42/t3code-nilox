@@ -12,6 +12,7 @@ import * as Scope from "effect/Scope";
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
 const DEFAULT_SHUTDOWN_GRACE_MS = 750;
+const MAX_BUFFERED_STARTUP_EVENTS = 64;
 const MAX_STDERR_CHARS = 64 * 1024;
 
 export const PI_MINIMUM_VERSION = "0.82.0";
@@ -449,6 +450,8 @@ export const makePiRpcSessionRuntime = Effect.fn("makePiRpcSessionRuntime")(func
   let requestSequence = 0;
   let terminalError: PiRpcError | undefined;
   const listeners = new Set<(event: PiRpcEvent, raw: unknown) => void>();
+  const bufferedStartupEvents: Array<{ readonly event: PiRpcEvent; readonly raw: unknown }> = [];
+  let eventListenerAttached = false;
   const exitListeners = new Set<
     (exit: { readonly code: number | null; readonly signal: NodeJS.Signals | null }) => void
   >();
@@ -566,7 +569,14 @@ export const makePiRpcSessionRuntime = Effect.fn("makePiRpcSessionRuntime")(func
       protocolFailure("Pi emitted an invalid known event.", cause);
       return;
     }
-    for (const listener of listeners) listener(event, raw);
+    if (!eventListenerAttached) {
+      bufferedStartupEvents.push({ event, raw });
+      if (bufferedStartupEvents.length > MAX_BUFFERED_STARTUP_EVENTS) {
+        bufferedStartupEvents.shift();
+      }
+    } else {
+      for (const listener of listeners) listener(event, raw);
+    }
     if (event.type === "agent_settled") {
       for (const waiter of settledWaiters) {
         clearTimeout(waiter.timer);
@@ -790,6 +800,13 @@ export const makePiRpcSessionRuntime = Effect.fn("makePiRpcSessionRuntime")(func
       }),
     onEvent: (listener) => {
       listeners.add(listener);
+      if (!eventListenerAttached) {
+        eventListenerAttached = true;
+        for (const buffered of bufferedStartupEvents) {
+          listener(buffered.event, buffered.raw);
+        }
+        bufferedStartupEvents.length = 0;
+      }
       return () => listeners.delete(listener);
     },
     onExit: (listener) => {

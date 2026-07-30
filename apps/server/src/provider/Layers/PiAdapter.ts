@@ -1,3 +1,4 @@
+// @effect-diagnostics globalTimers:off
 import {
   ApprovalRequestId,
   EventId,
@@ -89,6 +90,7 @@ type PendingUi =
         | "file_change_approval"
         | "dynamic_tool_call";
       readonly toolCategory: string;
+      timeoutHandle: NodeJS.Timeout | undefined;
     }
   | {
       readonly kind: "user-input";
@@ -96,6 +98,7 @@ type PendingUi =
       readonly requestId: ApprovalRequestId;
       readonly method: "select" | "confirm" | "input" | "editor";
       readonly questionId: string;
+      timeoutHandle: NodeJS.Timeout | undefined;
     };
 
 interface AssistantBlock {
@@ -420,6 +423,7 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
     const unregisteredSessionScopes = new Map<ThreadId, Scope.Closeable>();
     const runtimeEvents = yield* PubSub.unbounded<ProviderRuntimeEvent>();
     const threadLocks = yield* SynchronizedRef.make(new Map<string, Semaphore.Semaphore>());
+    const runFork = Effect.runForkWith(yield* Effect.context<never>());
 
     const nextUuid = crypto.randomUUIDv4.pipe(
       Effect.mapError(
@@ -499,35 +503,72 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
       });
     };
 
+    const takePendingUi = (
+      ctx: PiSessionContext,
+      requestId: ApprovalRequestId,
+    ): PendingUi | undefined => {
+      const pending = ctx.pendingUi.get(requestId);
+      if (!pending) return undefined;
+      ctx.pendingUi.delete(requestId);
+      if (pending.timeoutHandle !== undefined) {
+        clearTimeout(pending.timeoutHandle);
+        pending.timeoutHandle = undefined;
+      }
+      return pending;
+    };
+
+    const emitPendingUiResolved = (
+      ctx: PiSessionContext,
+      pending: PendingUi,
+      approvalDecision: ProviderApprovalDecision = "cancel",
+    ) =>
+      Effect.gen(function* () {
+        const eventStamp = yield* stamp;
+        if (pending.kind === "approval") {
+          yield* offer({
+            type: "request.resolved",
+            ...eventStamp,
+            ...baseEvent(ctx),
+            turnId: ctx.activeTurnId,
+            requestId: RuntimeRequestId.make(pending.requestId),
+            payload: { requestType: pending.requestType, decision: approvalDecision },
+          });
+        } else {
+          yield* offer({
+            type: "user-input.resolved",
+            ...eventStamp,
+            ...baseEvent(ctx),
+            turnId: ctx.activeTurnId,
+            requestId: RuntimeRequestId.make(pending.requestId),
+            payload: { answers: {} },
+          });
+        }
+      });
+
+    const schedulePendingUiTimeout = (
+      ctx: PiSessionContext,
+      pending: PendingUi,
+      timeoutMs: number | undefined,
+    ) => {
+      if (timeoutMs === undefined || !Number.isFinite(timeoutMs) || timeoutMs <= 0) return;
+      pending.timeoutHandle = setTimeout(() => {
+        const timedOut = takePendingUi(ctx, pending.requestId);
+        if (!timedOut) return;
+        runFork(emitPendingUiResolved(ctx, timedOut));
+      }, timeoutMs);
+    };
+
     const cancelPendingUi = (ctx: PiSessionContext) =>
       Effect.forEach(
         [...ctx.pendingUi.values()],
         (pending) =>
           Effect.gen(function* () {
+            const active = takePendingUi(ctx, pending.requestId);
+            if (!active) return;
             yield* ctx.runtime
-              .respondToExtensionUi({ id: pending.piRequestId, cancelled: true })
+              .respondToExtensionUi({ id: active.piRequestId, cancelled: true })
               .pipe(Effect.ignore);
-            const eventStamp = yield* stamp;
-            if (pending.kind === "approval") {
-              yield* offer({
-                type: "request.resolved",
-                ...eventStamp,
-                ...baseEvent(ctx),
-                turnId: ctx.activeTurnId,
-                requestId: RuntimeRequestId.make(pending.requestId),
-                payload: { requestType: pending.requestType, decision: "cancel" },
-              });
-            } else {
-              yield* offer({
-                type: "user-input.resolved",
-                ...eventStamp,
-                ...baseEvent(ctx),
-                turnId: ctx.activeTurnId,
-                requestId: RuntimeRequestId.make(pending.requestId),
-                payload: { answers: {} },
-              });
-            }
-            ctx.pendingUi.delete(pending.requestId);
+            yield* emitPendingUiResolved(ctx, active);
           }),
         { discard: true },
       );
@@ -786,13 +827,16 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
         const requestId = ApprovalRequestId.make(piRequestId);
         if (event.method === "select" && marker) {
           const requestType = toolRequestType(marker.toolName);
-          ctx.pendingUi.set(requestId, {
+          const pending: PendingUi = {
             kind: "approval",
             piRequestId,
             requestId,
             requestType,
             toolCategory: marker.category,
-          });
+            timeoutHandle: undefined,
+          };
+          ctx.pendingUi.set(requestId, pending);
+          schedulePendingUiTimeout(ctx, pending, event.timeout);
           yield* offer({
             type: "request.opened",
             ...(yield* stamp),
@@ -826,13 +870,16 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
                   { label: "No", description: "Do not confirm this action" },
                 ]
               : [];
-        ctx.pendingUi.set(requestId, {
+        const pending: PendingUi = {
           kind: "user-input",
           piRequestId,
           requestId,
           method,
           questionId,
-        });
+          timeoutHandle: undefined,
+        };
+        ctx.pendingUi.set(requestId, pending);
+        schedulePendingUiTimeout(ctx, pending, event.timeout);
         yield* offer({
           type: "user-input.requested",
           ...(yield* stamp),
@@ -1391,10 +1438,10 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
           sessions.set(input.threadId, ctx);
           unregisteredSessionScopes.delete(input.threadId);
           ctx.unsubscribeEvent = runtime.onEvent((event, rawPayload) => {
-            Effect.runFork(Queue.offer(eventQueue, { type: "event", event, raw: rawPayload }));
+            runFork(Queue.offer(eventQueue, { type: "event", event, raw: rawPayload }));
           });
           ctx.unsubscribeExit = runtime.onExit((exit) => {
-            Effect.runFork(Queue.offer(eventQueue, { type: "exit", ...exit }));
+            runFork(Queue.offer(eventQueue, { type: "exit", ...exit }));
           });
           ctx.eventFiber = yield* Stream.fromQueue(eventQueue).pipe(
             Stream.runForEach((signal) => handleSignal(ctx, signal)),
@@ -1617,9 +1664,9 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
             detail: `Unknown Pi approval request '${requestId}'.`,
           });
         }
+        takePendingUi(ctx, requestId);
         const response = piApprovalExtensionResponse(pending.piRequestId, decision);
         yield* ctx.runtime.respondToExtensionUi(response);
-        ctx.pendingUi.delete(requestId);
         yield* offer({
           type: "request.resolved",
           ...(yield* stamp),
@@ -1653,12 +1700,12 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
             issue: `Missing answer for '${pending.questionId}'.`,
           });
         }
+        takePendingUi(ctx, requestId);
         yield* ctx.runtime.respondToExtensionUi(
           pending.method === "confirm"
             ? { id: pending.piRequestId, confirmed: answer.toLowerCase() === "yes" }
             : { id: pending.piRequestId, value: answer },
         );
-        ctx.pendingUi.delete(requestId);
         yield* offer({
           type: "user-input.resolved",
           ...(yield* stamp),

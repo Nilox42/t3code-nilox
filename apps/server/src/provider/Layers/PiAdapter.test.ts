@@ -153,6 +153,32 @@ const waitForMockProcessCleanup = Effect.fn("waitForPiMockProcessCleanup")(funct
 });
 
 describe("PiAdapter lifecycle and event mapping", () => {
+  it.effect("replays extension diagnostics emitted during Pi startup", () =>
+    Effect.gen(function* () {
+      const { adapter } = yield* makeFixture({
+        T3_PI_MOCK_STARTUP_EXTENSION_ERROR: "Startup extension failed.",
+      });
+      const threadId = ThreadId.make("pi-startup-extension-error");
+      const errorFiber = yield* Stream.runHead(
+        Stream.filter(adapter.streamEvents, (event) => event.type === "runtime.error"),
+      ).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+
+      yield* adapter.startSession({
+        provider: PI,
+        threadId,
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      const error = yield* Fiber.join(errorFiber);
+
+      expect(error._tag).toBe("Some");
+      if (error._tag === "Some" && error.value.type === "runtime.error") {
+        expect(error.value.payload.message).toBe("Startup extension failed.");
+      }
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
   it.effect("does not register a session when the Pi process cannot spawn", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -577,6 +603,12 @@ describe("PiAdapter lifecycle and event mapping", () => {
       const settled = yield* collectThrough(adapter.streamEvents, "turn.completed").pipe(
         Effect.forkScoped,
       );
+      const idle = yield* Stream.runHead(
+        Stream.filter(
+          adapter.streamEvents,
+          (event) => event.type === "thread.state.changed" && event.payload.state === "idle",
+        ),
+      ).pipe(Effect.forkScoped);
       yield* Effect.yieldNow;
       yield* adapter.sendTurn({ threadId, input: "/agent-command" });
       expect(
@@ -585,13 +617,7 @@ describe("PiAdapter lifecycle and event mapping", () => {
       const events = yield* Fiber.join(settled);
 
       expect(events.filter((event) => event.type === "turn.completed")).toHaveLength(1);
-      for (let attempt = 0; attempt < 20; attempt += 1) {
-        const status = (yield* adapter.listSessions()).find(
-          (session) => session.threadId === threadId,
-        )?.status;
-        if (status === "ready") break;
-        yield* Effect.yieldNow;
-      }
+      yield* Fiber.join(idle);
       expect(
         (yield* adapter.listSessions()).find((session) => session.threadId === threadId)?.status,
       ).toBe("ready");
@@ -650,16 +676,16 @@ describe("PiAdapter lifecycle and event mapping", () => {
         const settled = yield* collectThrough(adapter.streamEvents, "turn.completed").pipe(
           Effect.forkScoped,
         );
+        const idle = yield* Stream.runHead(
+          Stream.filter(
+            adapter.streamEvents,
+            (event) => event.type === "thread.state.changed" && event.payload.state === "idle",
+          ),
+        ).pipe(Effect.forkScoped);
         yield* Effect.yieldNow;
         yield* adapter.sendTurn({ threadId, input: "Create a durable turn" });
         yield* Fiber.join(settled);
-        for (let attempt = 0; attempt < 20; attempt += 1) {
-          const current = (yield* adapter.listSessions()).find(
-            (candidate) => candidate.threadId === threadId,
-          );
-          if (current?.status === "ready") break;
-          yield* Effect.yieldNow;
-        }
+        yield* Fiber.join(idle);
 
         expect((yield* adapter.readThread(threadId)).turns).toHaveLength(1);
         expect((yield* adapter.rollbackThread(threadId, 1)).turns).toEqual([]);
@@ -1173,4 +1199,78 @@ describe("Pi approval policies and extension UI", () => {
       }).pipe(Effect.scoped, Effect.provide(testLayer)),
     );
   }
+
+  it.effect("resolves a timed extension dialog once when Pi's timeout expires", () =>
+    Effect.gen(function* () {
+      const { adapter } = yield* makeFixture({
+        T3_PI_MOCK_UI: "input",
+        T3_PI_MOCK_UI_TIMEOUT_MS: "25",
+      });
+      const threadId = ThreadId.make("pi-ui-timeout");
+      yield* adapter.startSession({
+        provider: PI,
+        threadId,
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      const requestedFiber = yield* Stream.runHead(
+        Stream.filter(adapter.streamEvents, (event) => event.type === "user-input.requested"),
+      ).pipe(Effect.forkScoped);
+      const resolvedEvents: Array<ProviderRuntimeEvent> = [];
+      yield* Stream.runForEach(
+        Stream.filter(adapter.streamEvents, (event) => event.type === "user-input.resolved"),
+        (event) => Effect.sync(() => resolvedEvents.push(event)),
+      ).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+
+      yield* adapter.sendTurn({ threadId, input: "Ask with a timeout" });
+      yield* Fiber.join(requestedFiber);
+      yield* Effect.sleep("75 millis");
+
+      expect(resolvedEvents).toHaveLength(1);
+      const error = yield* Effect.flip(
+        adapter.respondToUserInput(threadId, ApprovalRequestId.make("pi-ui-input"), {
+          answer: "Too late",
+        }),
+      );
+      expect(error.message).toMatch(/unknown Pi user-input request/i);
+    }).pipe(Effect.scoped, Effect.provide(testLayer), TestClock.withLive),
+  );
+
+  it.effect("clears a dialog timeout after a successful response", () =>
+    Effect.gen(function* () {
+      const { adapter } = yield* makeFixture({
+        T3_PI_MOCK_UI: "input",
+        T3_PI_MOCK_UI_TIMEOUT_MS: "50",
+      });
+      const threadId = ThreadId.make("pi-ui-response-before-timeout");
+      yield* adapter.startSession({
+        provider: PI,
+        threadId,
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      const requestedFiber = yield* Stream.runHead(
+        Stream.filter(adapter.streamEvents, (event) => event.type === "user-input.requested"),
+      ).pipe(Effect.forkScoped);
+      const resolvedEvents: Array<ProviderRuntimeEvent> = [];
+      yield* Stream.runForEach(
+        Stream.filter(adapter.streamEvents, (event) => event.type === "user-input.resolved"),
+        (event) => Effect.sync(() => resolvedEvents.push(event)),
+      ).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+
+      yield* adapter.sendTurn({ threadId, input: "Ask and answer promptly" });
+      yield* Fiber.join(requestedFiber);
+      yield* adapter.respondToUserInput(threadId, ApprovalRequestId.make("pi-ui-input"), {
+        answer: "On time",
+      });
+      yield* Effect.sleep("100 millis");
+
+      expect(resolvedEvents).toHaveLength(1);
+      if (resolvedEvents[0]?.type === "user-input.resolved") {
+        expect(resolvedEvents[0].payload.answers).toEqual({ answer: "On time" });
+      }
+    }).pipe(Effect.scoped, Effect.provide(testLayer), TestClock.withLive),
+  );
 });
