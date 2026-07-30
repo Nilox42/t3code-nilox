@@ -4,7 +4,6 @@
 // @effect-diagnostics preferSchemaOverJson:off
 import * as NodeChildProcess from "node:child_process";
 
-import type { PiSettings } from "@t3tools/contracts";
 import { tokenizeCliArgs } from "@t3tools/shared/cliArgs";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import * as Effect from "effect/Effect";
@@ -794,10 +793,3 @@ export const makePiRpcSessionRuntime = Effect.fn("makePiRpcSessionRuntime")(func
     close,
   };
 });
-
-export function piContinuationKey(
-  instanceId: string,
-  settings: Pick<PiSettings, "agentDir">,
-): string {
-  return `piAgent:instance:${instanceId}:agentDir:${settings.agentDir.trim() || "<default>"}`;
-}

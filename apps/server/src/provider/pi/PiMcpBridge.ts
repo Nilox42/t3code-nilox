@@ -6,7 +6,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import { parse, type ParseError } from "jsonc-parser";
 
-import { expandHomePath } from "../../pathExpansion.ts";
+import { resolvePiAgentDirectory } from "./PiAgentDirectory.ts";
 
 const PI_MCP_ADAPTER_PACKAGE = "pi-mcp-adapter";
 const T3_MCP_SERVER_NAME = "t3-code";
@@ -77,16 +77,6 @@ function safeInstanceName(instanceId: ProviderInstanceId): string {
   return safe || "piAgent";
 }
 
-function resolvePiAgentDir(
-  path: Path.Path,
-  settings: Pick<PiSettings, "agentDir">,
-  environment?: NodeJS.ProcessEnv,
-): string {
-  const configured =
-    settings.agentDir.trim() || environment?.PI_CODING_AGENT_DIR?.trim() || "~/.pi/agent";
-  return path.resolve(expandHomePath(configured));
-}
-
 function mergeT3McpServer(config: Record<string, unknown>): Record<string, unknown> {
   const legacyServers = isRecord(config["mcp-servers"]) ? config["mcp-servers"] : {};
   const currentServers = isRecord(config.mcpServers) ? config.mcpServers : {};
@@ -113,7 +103,7 @@ export const preparePiMcpBridge = Effect.fn("preparePiMcpBridge")(function* (
 ): Effect.fn.Return<PiMcpBridgeCapability, never, FileSystem.FileSystem | Path.Path> {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const agentDir = resolvePiAgentDir(path, input.settings, input.environment);
+  const agentDir = (yield* resolvePiAgentDirectory(input.settings, input.environment)).path;
   const settingsPath = path.join(agentDir, "settings.json");
   const packagePath = path.join(agentDir, "npm", "node_modules", PI_MCP_ADAPTER_PACKAGE);
 

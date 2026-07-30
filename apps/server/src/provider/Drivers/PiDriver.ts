@@ -20,7 +20,7 @@ import {
 } from "../Layers/PiProvider.ts";
 import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
 import { materializePiPermissionBridge } from "../pi/PiPermissionBridge.ts";
-import { piContinuationKey } from "../pi/PiRpcSessionRuntime.ts";
+import { resolvePiAgentDirectory } from "../pi/PiAgentDirectory.ts";
 import type { ProviderDriver, ProviderInstance } from "../ProviderDriver.ts";
 import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
 import {
@@ -85,7 +85,16 @@ export const PiDriver: ProviderDriver<PiSettings, PiDriverEnv> = {
       const serverSettings = yield* ServerSettingsService;
       const effectiveConfig = { ...config, enabled } satisfies PiSettings;
       const processEnvironment = mergeProviderInstanceEnvironment(environment);
-      const continuationKey = piContinuationKey(instanceId, effectiveConfig);
+      const agentDirectory = yield* resolvePiAgentDirectory(
+        effectiveConfig,
+        processEnvironment,
+        serverConfig.cwd,
+      );
+      const runtimeConfig = {
+        ...effectiveConfig,
+        agentDir: agentDirectory.path,
+      } satisfies PiSettings;
+      const continuationKey = agentDirectory.continuationKey;
       const extensionPath = yield* materializePiPermissionBridge(serverConfig.stateDir).pipe(
         Effect.mapError(
           (cause) =>
@@ -100,16 +109,16 @@ export const PiDriver: ProviderDriver<PiSettings, PiDriverEnv> = {
       const mcpBridge = yield* preparePiMcpBridge({
         stateDir: serverConfig.stateDir,
         instanceId,
-        settings: effectiveConfig,
+        settings: runtimeConfig,
         environment: processEnvironment,
       });
-      const adapter = yield* makePiAdapter(effectiveConfig, {
+      const adapter = yield* makePiAdapter(runtimeConfig, {
         instanceId,
         environment: processEnvironment,
         extensionPath,
         mcpBridge,
       });
-      const textGeneration = yield* makePiTextGeneration(effectiveConfig, processEnvironment);
+      const textGeneration = yield* makePiTextGeneration(runtimeConfig, processEnvironment);
       const maintenanceCapabilities = yield* resolveProviderMaintenanceCapabilitiesEffect(UPDATE, {
         binaryPath: effectiveConfig.binaryPath,
         env: processEnvironment,
@@ -122,7 +131,7 @@ export const PiDriver: ProviderDriver<PiSettings, PiDriverEnv> = {
           continuationGroupKey: continuationKey,
         });
       const checkProvider = checkPiProviderStatus(
-        effectiveConfig,
+        runtimeConfig,
         serverConfig.cwd,
         processEnvironment,
         mcpBridge,
