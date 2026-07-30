@@ -833,6 +833,65 @@ describe("PiAdapter lifecycle and event mapping", () => {
     }).pipe(Effect.scoped, Effect.provide(testLayer), TestClock.withLive),
   );
 
+  it.effect("preserves Pi's upstream error message when a turn fails", () =>
+    Effect.gen(function* () {
+      const { adapter } = yield* makeFixture({
+        T3_PI_MOCK_TURN_ERROR: "Authentication expired. Run /login again.",
+      });
+      const threadId = ThreadId.make("pi-turn-error");
+      yield* adapter.startSession({
+        provider: PI,
+        threadId,
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      const eventsFiber = yield* collectThrough(adapter.streamEvents, "turn.completed").pipe(
+        Effect.forkScoped,
+      );
+      yield* Effect.yieldNow;
+
+      yield* adapter.sendTurn({ threadId, input: "Trigger an upstream error" });
+      const events = yield* Fiber.join(eventsFiber);
+      const completed = events.find((event) => event.type === "turn.completed");
+
+      expect(completed?.type === "turn.completed" && completed.payload).toMatchObject({
+        state: "failed",
+        stopReason: "error",
+        errorMessage: "Authentication expired. Run /login again.",
+      });
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("treats an idle Pi SIGTERM exit code as graceful shutdown", () =>
+    Effect.gen(function* () {
+      const { adapter } = yield* makeFixture({
+        T3_PI_MOCK_EXIT_AFTER_PROMPT_CODE: "143",
+      });
+      const threadId = ThreadId.make("pi-idle-sigterm");
+      yield* adapter.startSession({
+        provider: PI,
+        threadId,
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      const eventsFiber = yield* collectThrough(adapter.streamEvents, "session.exited").pipe(
+        Effect.forkScoped,
+      );
+      yield* Effect.yieldNow;
+
+      yield* adapter.sendTurn({ threadId, input: "Finish, then exit" });
+      const events = yield* Fiber.join(eventsFiber);
+      const sessionExited = events.find((event) => event.type === "session.exited");
+
+      expect(events.some((event) => event.type === "turn.completed")).toBe(true);
+      expect(events.some((event) => event.type === "runtime.error")).toBe(false);
+      expect(sessionExited?.type === "session.exited" && sessionExited.payload.exitKind).toBe(
+        "graceful",
+      );
+      expect(yield* adapter.hasSession(threadId)).toBe(false);
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
   it.effect("converts T3 image attachments to Pi base64 ImageContent", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -1006,14 +1065,16 @@ describe("PiAdapter lifecycle and event mapping", () => {
       const settled = yield* collectThrough(adapter.streamEvents, "turn.completed").pipe(
         Effect.forkScoped,
       );
+      const idle = yield* Stream.runHead(
+        Stream.filter(
+          adapter.streamEvents,
+          (event) => event.type === "thread.state.changed" && event.payload.state === "idle",
+        ),
+      ).pipe(Effect.forkScoped);
       yield* Effect.yieldNow;
       yield* adapter.sendTurn({ threadId, input: "Keep this turn" });
       yield* Fiber.join(settled);
-      for (let attempt = 0; attempt < 20; attempt += 1) {
-        const [session] = yield* adapter.listSessions();
-        if (session?.status === "ready") break;
-        yield* Effect.yieldNow;
-      }
+      yield* Fiber.join(idle);
 
       const error = yield* Effect.flip(adapter.rollbackThread(threadId, 1));
 

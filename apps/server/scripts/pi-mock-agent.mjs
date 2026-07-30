@@ -219,6 +219,7 @@ function emitMetadataEvents() {
 }
 
 function emitPromptEvents() {
+  const errorMessage = env.T3_PI_MOCK_TURN_ERROR;
   streaming = true;
   emitMetadataEvents();
   write({ type: "agent_start" });
@@ -340,18 +341,25 @@ function emitPromptEvents() {
   });
   write({
     type: "message_update",
-    assistantMessageEvent: {
-      type: "text_delta",
-      contentIndex: 1,
-      delta: assistantText,
-    },
+    assistantMessageEvent: errorMessage
+      ? {
+          type: "error",
+          reason: "error",
+          error: { stopReason: "error", errorMessage },
+        }
+      : {
+          type: "text_delta",
+          contentIndex: 1,
+          delta: assistantText,
+        },
   });
   write({
     type: "message_end",
     message: {
       role: "assistant",
       content: [{ type: "text", text: assistantText }],
-      stopReason: aborted ? "aborted" : "stop",
+      stopReason: aborted ? "aborted" : errorMessage ? "error" : "stop",
+      ...(errorMessage ? { errorMessage } : {}),
       usage: mockUsage("T3_PI_MOCK_USAGE_", {
         input: 20,
         output: 10,
@@ -365,6 +373,9 @@ function emitPromptEvents() {
   write({ type: "turn_end" });
   write({ type: "agent_end" });
   write({ type: "agent_settled" });
+  if (env.T3_PI_MOCK_EXIT_AFTER_PROMPT_CODE) {
+    setTimeout(() => process.exit(Number(env.T3_PI_MOCK_EXIT_AFTER_PROMPT_CODE)), 10);
+  }
 }
 
 function emitUiRequest() {
@@ -540,6 +551,9 @@ input.on("line", (line) => {
       break;
     case "set_thinking_level":
       thinkingLevel = request.level;
+      if (env.T3_PI_MOCK_THINKING_LEVEL_CHANGED === "1") {
+        write({ type: "thinking_level_changed", level: thinkingLevel });
+      }
       respond(request);
       break;
     case "prompt":

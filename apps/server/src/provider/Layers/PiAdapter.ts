@@ -15,6 +15,7 @@ import {
   type RuntimeMode,
 } from "@t3tools/contracts";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
+import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -130,6 +131,7 @@ interface PiSessionContext {
   interruptingTurnId: TurnId | undefined;
   finalStopReason: string | undefined;
   readonly mcpServerNames: Set<string>;
+  finalErrorMessage: string | undefined;
   toolUses: number;
   stopped: boolean;
   settledTurns: Set<TurnId>;
@@ -628,6 +630,7 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
         ctx.activeTurnId = undefined;
         ctx.interruptingTurnId = undefined;
         ctx.finalStopReason = undefined;
+        ctx.finalErrorMessage = undefined;
         ctx.activeAssistantMessageSequence = undefined;
         ctx.assistantBlocks.clear();
         const { activeTurnId: _activeTurnId, ...readySession } = ctx.session;
@@ -908,6 +911,10 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
             const deltaType = deltaEvent.type;
             if (deltaType === "error") {
               ctx.finalStopReason = nonEmpty(deltaEvent.reason) ?? "error";
+              if (isRecord(deltaEvent.error)) {
+                ctx.finalErrorMessage =
+                  nonEmpty(deltaEvent.error.errorMessage) ?? ctx.finalErrorMessage;
+              }
               return;
             }
             if (deltaType !== "text_delta" && deltaType !== "thinking_delta") return;
@@ -950,6 +957,7 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
               const message = event.message;
               if (message.role === "assistant") {
                 ctx.finalStopReason = nonEmpty(message.stopReason) ?? ctx.finalStopReason;
+                ctx.finalErrorMessage = nonEmpty(message.errorMessage) ?? ctx.finalErrorMessage;
                 if (ctx.assistantMessageSequence === 0) {
                   ctx.assistantMessageSequence = 1;
                 }
@@ -1105,12 +1113,35 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
             const reason = ctx.finalStopReason;
             if (reason === "aborted") return yield* settleTurn(ctx, "interrupted", "Turn aborted.");
             if (reason === "error")
-              return yield* settleTurn(ctx, "failed", "Pi Agent turn failed.");
+              return yield* settleTurn(
+                ctx,
+                "failed",
+                ctx.finalErrorMessage ?? "Pi Agent turn failed.",
+              );
             return yield* settleTurn(ctx, "completed");
           }
           default:
             return;
         }
+      });
+
+    const stopSessionInternal = (ctx: PiSessionContext) =>
+      Effect.gen(function* () {
+        if (ctx.stopped) return;
+        ctx.stopped = true;
+        yield* cancelPendingUi(ctx);
+        ctx.unsubscribeEvent?.();
+        ctx.unsubscribeExit?.();
+        yield* ctx.runtime.close.pipe(Effect.timeoutOption("2 seconds"), Effect.ignore);
+        sessions.delete(ctx.threadId);
+        yield* offer({
+          type: "session.exited",
+          ...(yield* stamp),
+          ...baseEvent(ctx),
+          payload: { exitKind: "graceful" },
+        });
+        yield* Queue.shutdown(ctx.eventQueue);
+        yield* Scope.close(ctx.scope, Exit.void).pipe(Effect.ignore);
       });
 
     const handleSignal = (ctx: PiSessionContext, signal: PiNativeSignal) =>
@@ -1133,6 +1164,12 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
           )
         : Effect.gen(function* () {
             if (ctx.stopped) return;
+            if (
+              ctx.activeTurnId === undefined &&
+              (signal.code === 143 || signal.signal === "SIGTERM")
+            ) {
+              return yield* stopSessionInternal(ctx);
+            }
             const message = `Pi Agent process exited unexpectedly (code ${signal.code ?? "null"}, signal ${signal.signal ?? "none"}).`;
             yield* cancelPendingUi(ctx);
             yield* settleTurn(ctx, "failed", message);
@@ -1155,26 +1192,6 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
               payload: { exitKind: "error", reason: message, recoverable: false },
             });
           });
-
-    const stopSessionInternal = (ctx: PiSessionContext) =>
-      Effect.gen(function* () {
-        if (ctx.stopped) return;
-        ctx.stopped = true;
-        yield* cancelPendingUi(ctx);
-        ctx.unsubscribeEvent?.();
-        ctx.unsubscribeExit?.();
-        yield* ctx.runtime.close.pipe(Effect.timeoutOption("2 seconds"), Effect.ignore);
-        yield* Queue.shutdown(ctx.eventQueue);
-        if (ctx.eventFiber) yield* Fiber.interrupt(ctx.eventFiber);
-        yield* Scope.close(ctx.scope, Exit.void).pipe(Effect.ignore);
-        sessions.delete(ctx.threadId);
-        yield* offer({
-          type: "session.exited",
-          ...(yield* stamp),
-          ...baseEvent(ctx),
-          payload: { exitKind: "graceful" },
-        });
-      });
 
     const startSession: PiAdapterShape["startSession"] = (input) =>
       withThreadLock(
@@ -1366,6 +1383,7 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
             interruptingTurnId: undefined,
             finalStopReason: undefined,
             mcpServerNames: new Set(mcpBridgeEnabled ? ["t3-code"] : []),
+            finalErrorMessage: undefined,
             toolUses: 0,
             stopped: false,
             settledTurns: new Set(),
@@ -1380,7 +1398,11 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
           });
           ctx.eventFiber = yield* Stream.fromQueue(eventQueue).pipe(
             Stream.runForEach((signal) => handleSignal(ctx, signal)),
-            Effect.catchCause((cause) => Effect.logError("Pi event stream failed", cause)),
+            Effect.catchCause((cause) =>
+              Cause.hasInterruptsOnly(cause)
+                ? Effect.void
+                : Effect.logError("Pi event stream failed", cause),
+            ),
             Effect.forkIn(sessionScope),
           );
           yield* offer({
@@ -1498,6 +1520,7 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
             ctx.turns.push({ id: turnId, items: [] });
             ctx.toolUses = 0;
             ctx.finalStopReason = undefined;
+            ctx.finalErrorMessage = undefined;
             ctx.assistantUsageByMessage.clear();
             ctx.assistantMessageSequence = 0;
             ctx.activeAssistantMessageSequence = undefined;

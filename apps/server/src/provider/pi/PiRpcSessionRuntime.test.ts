@@ -134,7 +134,7 @@ describe("Pi RPC JSONL runtime", () => {
 
       expect(result[0].sessionId).toBe("pi-mock-session");
       expect(result[1][0]?.id).toBe("mock/model");
-      expect(result[2][0]?.name).toBe("login");
+      expect(result[2][0]?.name).toBe("agent-command");
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
@@ -150,6 +150,18 @@ describe("Pi RPC JSONL runtime", () => {
 
       expect(state.sessionId).toBe("pi-mock-session");
       expect(models[0]?.provider).toBe("mock-provider");
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("accepts Pi session metadata events emitted before command responses", () =>
+    Effect.gen(function* () {
+      const runtime = yield* makeRuntime({ T3_PI_MOCK_THINKING_LEVEL_CHANGED: "1" });
+      const events: string[] = [];
+      runtime.onEvent((event) => events.push(event.type));
+
+      yield* runtime.setThinkingLevel("high");
+
+      expect(events).toContain("thinking_level_changed");
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
