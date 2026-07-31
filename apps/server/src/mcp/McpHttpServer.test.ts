@@ -198,6 +198,15 @@ it.effect("registers annotated tools and preserves authenticated request context
         readonly operation: string;
         readonly tabId?: string | undefined;
       }> = [];
+      const evaluateResults: ReadonlyArray<unknown> = [
+        { kind: "object" },
+        "primitive",
+        ["first", "second"],
+        null,
+        undefined,
+      ];
+      let evaluateResultIndex = 0;
+      let failNextClick = false;
       const events = yield* broker.connect({
         clientId: "mcp-test-client",
         environmentId,
@@ -205,6 +214,20 @@ it.effect("registers annotated tools and preserves authenticated request context
       yield* Stream.runForEach(events, (event) => {
         if (event.type === "connected") return Effect.void;
         routedRequests.push(event.request);
+        if (event.request.operation === "click" && failNextClick) {
+          failNextClick = false;
+          return broker.respond({
+            clientId: "mcp-test-client",
+            connectionId: event.connectionId,
+            requestId: event.request.requestId,
+            ok: false,
+            error: {
+              _tag: "PreviewAutomationInvalidSelectorError",
+              message: "renderer selector failure with sensitive browser state",
+              detail: { browserState: "must not reach the MCP client" },
+            },
+          });
+        }
         return broker.respond({
           clientId: "mcp-test-client",
           connectionId: event.connectionId,
@@ -229,8 +252,8 @@ it.effect("registers annotated tools and preserves authenticated request context
                     height: 5,
                   },
                 }
-              : event.request.operation === "press"
-                ? undefined
+              : event.request.operation === "evaluate"
+                ? evaluateResults[evaluateResultIndex++]
                 : {
                     available: true,
                     visible: true,
@@ -297,15 +320,75 @@ it.effect("registers annotated tools and preserves authenticated request context
         alternateTabId,
       );
 
-      const press = yield* server
-        .callTool({ name: "preview_press", arguments: { key: "Enter" } })
+      const actionCalls = [
+        { name: "preview_click", arguments: { locator: "body" } },
+        { name: "preview_type", arguments: { locator: "body", text: "example" } },
+        { name: "preview_press", arguments: { key: "Enter" } },
+        { name: "preview_scroll", arguments: { deltaY: 100 } },
+        { name: "preview_wait_for", arguments: { text: "Example" } },
+      ] as const;
+      for (const actionCall of actionCalls) {
+        const action = yield* server
+          .callTool(actionCall)
+          .pipe(
+            Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+            Effect.provideService(McpSchema.McpServerClient, client),
+          );
+        expect(action.isError).toBe(false);
+        expect(action.structuredContent).toEqual({ ok: true });
+        expect(action.content).toEqual([{ type: "text", text: '{"ok":true}' }]);
+      }
+
+      const evaluateCases = [
+        {
+          expression: "({ kind: 'object' })",
+          expected: { kind: "object" },
+          expectedText: '{"kind":"object"}',
+        },
+        {
+          expression: "'primitive'",
+          expected: undefined,
+          expectedText: '"primitive"',
+        },
+        {
+          expression: "['first', 'second']",
+          expected: { result: ["first", "second"] },
+          expectedText: '{"result":["first","second"]}',
+        },
+        { expression: "null", expected: { result: null }, expectedText: '{"result":null}' },
+        { expression: "undefined", expected: { result: null }, expectedText: '{"result":null}' },
+      ] as const;
+      for (const evaluateCase of evaluateCases) {
+        const evaluate = yield* server
+          .callTool({
+            name: "preview_evaluate",
+            arguments: { expression: evaluateCase.expression },
+          })
+          .pipe(
+            Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+            Effect.provideService(McpSchema.McpServerClient, client),
+          );
+        expect(evaluate.isError).toBe(false);
+        expect(evaluate.structuredContent).toEqual(evaluateCase.expected);
+        expect(evaluate.content).toEqual([{ type: "text", text: evaluateCase.expectedText }]);
+      }
+
+      const invalidLocator = "css=[";
+      failNextClick = true;
+      const failedClick = yield* server
+        .callTool({ name: "preview_click", arguments: { locator: invalidLocator } })
         .pipe(
           Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
           Effect.provideService(McpSchema.McpServerClient, client),
         );
-      expect(press.isError).toBe(false);
-      expect(press.structuredContent).toBeNull();
-      expect(press.content).toEqual([{ type: "text", text: "null" }]);
+      expect(failedClick.isError).toBe(true);
+      expect(failedClick.structuredContent).toBeUndefined();
+      expect(failedClick.content).toEqual([
+        {
+          type: "text",
+          text: `Preview automation click received an invalid locator (${invalidLocator.length} characters).`,
+        },
+      ]);
     }),
   ).pipe(Effect.provide(TestLayer)),
 );

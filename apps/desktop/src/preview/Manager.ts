@@ -3101,9 +3101,10 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         input.returnByValue ?? true,
         input.awaitPromise ?? true,
       );
+      const result = value === undefined ? null : value;
       const serialized = yield* encodeJson(
         { operation: "automationEvaluate.encodeResult", tabId },
-        value,
+        result,
       );
       const actualBytes = Buffer.byteLength(serialized, "utf8");
       if (actualBytes > MAX_EVALUATION_BYTES) {
@@ -3113,7 +3114,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
           maximumBytes: MAX_EVALUATION_BYTES,
         });
       }
-      return value;
+      return result;
     },
   );
 

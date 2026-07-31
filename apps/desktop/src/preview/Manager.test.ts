@@ -1945,6 +1945,45 @@ describe("PreviewManager", () => {
       }),
     ),
   );
+
+  effectIt.effect("normalizes an undefined evaluation result to null", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const sendCommand = vi.fn(async (method: string) =>
+          method === "Runtime.evaluate" ? { result: {} } : undefined,
+        );
+        fromId.mockReturnValue({
+          id: 42,
+          isDestroyed: () => false,
+          getType: () => "webview",
+          getURL: () => "https://example.com",
+          getTitle: () => "Example",
+          isLoading: () => false,
+          isDevToolsOpened: () => false,
+          getZoomFactor: () => 1,
+          setZoomFactor: vi.fn(),
+          on: vi.fn(),
+          off: vi.fn(),
+          ipc: { on: vi.fn(), off: vi.fn() },
+          send: webviewSend,
+          navigationHistory: { canGoBack: () => false, canGoForward: () => false },
+          setWindowOpenHandler: vi.fn(),
+          debugger: {
+            isAttached: () => false,
+            attach: vi.fn(),
+            sendCommand,
+            on: vi.fn(),
+            off: vi.fn(),
+          },
+        } as never);
+
+        yield* manager.createTab("tab_1");
+        yield* manager.registerWebview("tab_1", 42);
+
+        expect(yield* manager.automationEvaluate("tab_1", { expression: "undefined" })).toBeNull();
+      }),
+    ),
+  );
 });
 
 describe("PreviewOperationError", () => {

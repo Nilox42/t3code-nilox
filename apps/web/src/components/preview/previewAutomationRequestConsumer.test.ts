@@ -324,6 +324,68 @@ describe("previewAutomationRequestConsumer", () => {
     });
   });
 
+  it("maps desktop invalid selectors to the public typed response", () => {
+    expect(
+      serializePreviewAutomationError(
+        {
+          _tag: "PreviewAutomationInvalidSelectorError",
+          tabId: "tab-1",
+          selectorKind: "locator",
+          selectorLength: 1,
+          reasonLength: 24,
+        },
+        {
+          requestId: "request-click",
+          operation: "click",
+          environmentId,
+          threadId,
+          tabId,
+        },
+      ),
+    ).toEqual({
+      _tag: "PreviewAutomationInvalidSelectorError",
+      message:
+        "Preview automation click request request-click received an invalid selector in tab tab-1.",
+      detail: {
+        requestId: "request-click",
+        operation: "click",
+        environmentId: "environment-1",
+        threadId: "thread-1",
+        tabId: "tab-1",
+        selectorKind: "locator",
+        selectorLength: 1,
+      },
+    });
+  });
+
+  it("maps invalid selectors reconstructed by Electron to the public typed response", () => {
+    expect(
+      serializePreviewAutomationError(
+        new Error(
+          "Error invoking remote method 'desktop:preview-automation-click': PreviewAutomationInvalidSelectorError: Preview automation click rejected selector.",
+        ),
+        {
+          requestId: "request-click",
+          operation: "click",
+          environmentId,
+          threadId,
+          tabId,
+        },
+      ),
+    ).toEqual({
+      _tag: "PreviewAutomationInvalidSelectorError",
+      message:
+        "Preview automation click request request-click received an invalid selector in tab tab-1.",
+      detail: {
+        requestId: "request-click",
+        operation: "click",
+        environmentId: "environment-1",
+        threadId: "thread-1",
+        tabId: "tab-1",
+      },
+    });
+  });
+
   it("correlates unexpected failures without exposing cause details", () => {
     const cause = new Error("private bridge token: preview-secret");
     const context = {

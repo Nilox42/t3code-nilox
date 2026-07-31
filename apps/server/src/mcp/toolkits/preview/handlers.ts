@@ -60,6 +60,13 @@ const invokeTargeted = <A>(
   return invoke<A>(operation, operationInput, timeoutMs, tabId);
 };
 
+const previewActionSucceeded = { ok: true } as const;
+
+const normalizeEvaluateResult = (result: unknown): unknown =>
+  result === null || result === undefined || Array.isArray(result)
+    ? { result: result ?? null }
+    : result;
+
 const handlers = {
   preview_status: (input) => invokeTargeted<PreviewAutomationStatus>("status", input ?? {}),
   preview_open: (input) =>
@@ -72,15 +79,17 @@ const handlers = {
     invokeTargeted<PreviewAutomationSetColorSchemeResult>("setColorScheme", input),
   preview_snapshot: (input) => invokeTargeted<PreviewAutomationSnapshot>("snapshot", input ?? {}),
   preview_click: (input) =>
-    invokeTargeted<void>("click", input, input.timeoutMs).pipe(Effect.as(null)),
+    invokeTargeted<void>("click", input, input.timeoutMs).pipe(Effect.as(previewActionSucceeded)),
   preview_type: (input) =>
-    invokeTargeted<void>("type", input, input.timeoutMs).pipe(Effect.as(null)),
-  preview_press: (input) => invokeTargeted<void>("press", input).pipe(Effect.as(null)),
-  preview_scroll: (input) => invokeTargeted<void>("scroll", input).pipe(Effect.as(null)),
+    invokeTargeted<void>("type", input, input.timeoutMs).pipe(Effect.as(previewActionSucceeded)),
+  preview_press: (input) =>
+    invokeTargeted<void>("press", input).pipe(Effect.as(previewActionSucceeded)),
+  preview_scroll: (input) =>
+    invokeTargeted<void>("scroll", input).pipe(Effect.as(previewActionSucceeded)),
   preview_evaluate: (input) =>
-    invokeTargeted<unknown>("evaluate", input).pipe(Effect.map((result) => result ?? null)),
+    invokeTargeted<unknown>("evaluate", input).pipe(Effect.map(normalizeEvaluateResult)),
   preview_wait_for: (input) =>
-    invokeTargeted<void>("waitFor", input, input.timeoutMs).pipe(Effect.as(null)),
+    invokeTargeted<void>("waitFor", input, input.timeoutMs).pipe(Effect.as(previewActionSucceeded)),
   preview_recording_start: (input) =>
     invokeTargeted<PreviewAutomationRecordingStatus>("recordingStart", input ?? {}),
   preview_recording_stop: (input) =>

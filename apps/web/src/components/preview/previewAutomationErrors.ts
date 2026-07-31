@@ -134,6 +134,68 @@ export class PreviewAutomationTargetNotEditableHostError extends Schema.TaggedEr
   }
 }
 
+export class PreviewAutomationInvalidSelectorHostError extends Schema.TaggedErrorClass<PreviewAutomationInvalidSelectorHostError>()(
+  "PreviewAutomationInvalidSelectorHostError",
+  {
+    requestId: TrimmedNonEmptyString,
+    operation: PreviewAutomationOperation,
+    environmentId: EnvironmentId,
+    threadId: ThreadId,
+    tabId: Schema.NullOr(PreviewTabId),
+    selectorKind: Schema.optional(Schema.Literals(["locator", "selector"])),
+    selectorLength: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+  },
+) {
+  get responseTag() {
+    return "PreviewAutomationInvalidSelectorError" as const;
+  }
+
+  override get message(): string {
+    return `Preview automation ${this.operation} request ${this.requestId} received an invalid selector in tab ${this.tabId ?? "unassigned"}.`;
+  }
+}
+
+const invalidSelectorDiagnostics = (
+  cause: unknown,
+): {
+  readonly selectorKind?: "locator" | "selector";
+  readonly selectorLength?: number;
+} | null => {
+  if (
+    typeof cause === "object" &&
+    cause !== null &&
+    "message" in cause &&
+    typeof cause.message === "string" &&
+    cause.message.includes("PreviewAutomationInvalidSelectorError:")
+  ) {
+    return {};
+  }
+  if (
+    typeof cause !== "object" ||
+    cause === null ||
+    !("_tag" in cause) ||
+    cause._tag !== "PreviewAutomationInvalidSelectorError"
+  ) {
+    return null;
+  }
+  const selectorKind =
+    "selectorKind" in cause &&
+    (cause.selectorKind === "locator" || cause.selectorKind === "selector")
+      ? cause.selectorKind
+      : undefined;
+  const selectorLength =
+    "selectorLength" in cause &&
+    typeof cause.selectorLength === "number" &&
+    Number.isInteger(cause.selectorLength) &&
+    cause.selectorLength >= 0
+      ? cause.selectorLength
+      : undefined;
+  return {
+    ...(selectorKind === undefined ? {} : { selectorKind }),
+    ...(selectorLength === undefined ? {} : { selectorLength }),
+  };
+};
+
 const targetNotEditableDiagnostics = (
   cause: unknown,
 ): {
@@ -183,6 +245,17 @@ export class PreviewAutomationOperationError extends Schema.TaggedErrorClass<Pre
     input: PreviewAutomationOperationContext & { readonly cause: unknown },
   ): PreviewAutomationHostError {
     if (isPreviewAutomationHostError(input.cause)) return input.cause;
+    const invalidSelector = invalidSelectorDiagnostics(input.cause);
+    if (invalidSelector) {
+      return new PreviewAutomationInvalidSelectorHostError({
+        requestId: input.requestId,
+        operation: input.operation,
+        environmentId: input.environmentId,
+        threadId: input.threadId,
+        tabId: input.tabId,
+        ...invalidSelector,
+      });
+    }
     const diagnostics = targetNotEditableDiagnostics(input.cause);
     return diagnostics
       ? new PreviewAutomationTargetNotEditableHostError({
@@ -211,6 +284,7 @@ export const PreviewAutomationHostError = Schema.Union([
   PreviewAutomationViewportTimeoutError,
   PreviewAutomationTargetUnavailableError,
   PreviewAutomationRecordingNotActiveError,
+  PreviewAutomationInvalidSelectorHostError,
   PreviewAutomationTargetNotEditableHostError,
   PreviewAutomationOperationError,
 ]);
