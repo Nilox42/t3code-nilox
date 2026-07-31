@@ -99,7 +99,15 @@ const makeMcpAuthMiddleware = McpSessionRegistry.McpSessionRegistry.pipe(
             ? authorization.slice("Bearer ".length).trim()
             : "";
         const invocation = yield* registry.resolve(token);
-        if (!invocation) return unauthorized;
+        if (!invocation) {
+          // Without this the only symptom of a dead credential is the agent
+          // quietly losing the whole `t3-code` toolkit for the rest of its
+          // session, with nothing on the server to explain why.
+          yield* Effect.logWarning("rejected MCP request with an unusable credential", {
+            reason: token.length === 0 ? "missing_bearer_token" : "unknown_or_expired_token",
+          });
+          return unauthorized;
+        }
         if (
           request.method === "POST" &&
           request.headers["mcp-method"]?.toLowerCase() === "server/discover"
@@ -246,23 +254,4 @@ const McpTransportLive = McpServer.layerHttp({
   path: "/mcp",
 }).pipe(Layer.provide(McpAuthMiddlewareLive));
 
-/**
- * Streamable HTTP clients probe the MCP endpoint with GET to open an optional
- * server-to-client SSE stream. T3 currently has no standalone SSE stream, so
- * the MCP specification requires a 405 response. Without this exact route,
- * the web-app catch-all redirects GET /mcp to Vite or index.html and clients
- * incorrectly downgrade to the legacy SSE transport.
- */
-export const McpGetNotSupportedRouteLive = HttpRouter.add(
-  "GET",
-  "/mcp",
-  HttpServerResponse.empty({
-    status: 405,
-    headers: { allow: "POST, DELETE" },
-  }),
-);
-
-export const layer = Layer.merge(
-  PreviewToolkitRegistrationLive.pipe(Layer.provideMerge(McpTransportLive)),
-  McpGetNotSupportedRouteLive,
-);
+export const layer = PreviewToolkitRegistrationLive.pipe(Layer.provideMerge(McpTransportLive));

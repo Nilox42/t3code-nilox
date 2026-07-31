@@ -235,7 +235,7 @@ function rehydratePiTurnRecords(history: {
   }
 
   const turns: Array<PiTurnRecord> = [];
-  for (const entry of branch.reverse()) {
+  for (const entry of branch.toReversed()) {
     if (entry.type !== "message") continue;
     const id = nonEmpty(entry.id);
     const message = entry.message;
@@ -1489,10 +1489,10 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
           sessions.set(input.threadId, ctx);
           unregisteredSessionScopes.delete(input.threadId);
           ctx.unsubscribeEvent = runtime.onEvent((event, rawPayload) => {
-            runFork(Queue.offer(eventQueue, { type: "event", event, raw: rawPayload }));
+            Queue.offerUnsafe(eventQueue, { type: "event", event, raw: rawPayload });
           });
           ctx.unsubscribeExit = runtime.onExit((exit) => {
-            runFork(Queue.offer(eventQueue, { type: "exit", ...exit }));
+            Queue.offerUnsafe(eventQueue, { type: "exit", ...exit });
           });
           ctx.eventFiber = yield* Stream.fromQueue(eventQueue).pipe(
             Stream.runForEach((signal) => handleSignal(ctx, signal)),
@@ -1631,36 +1631,53 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
             yield* applyModelSelection(ctx, selection);
           }
 
-          yield* ctx.runtime.prompt({
-            message: text,
-            images,
-            ...(steering ? { streamingBehavior: "steer" as const } : {}),
-          });
-          const state = yield* ctx.runtime.getState();
-          ctx.currentModel = state.model ?? undefined;
-          ctx.currentThinkingLevel = state.thinkingLevel;
-          ctx.activeTurnId = turnId;
-          const model = piModelSlug(ctx.currentModel);
-          ctx.session = {
-            ...ctx.session,
-            status: "running",
-            activeTurnId: turnId,
-            ...(model ? { model } : {}),
-            updatedAt: DateTime.formatIso(yield* DateTime.now),
-          };
+          const startingModel = piModelSlug(ctx.currentModel);
           if (!steering) {
+            ctx.activeTurnId = turnId;
+            ctx.session = {
+              ...ctx.session,
+              status: "running",
+              activeTurnId: turnId,
+              ...(startingModel ? { model: startingModel } : {}),
+              updatedAt: DateTime.formatIso(yield* DateTime.now),
+            };
             yield* offer({
               type: "turn.started",
               ...(yield* stamp),
               ...baseEvent(ctx),
               turnId,
               payload: {
-                ...(model ? { model } : {}),
+                ...(startingModel ? { model: startingModel } : {}),
                 effort: ctx.currentThinkingLevel,
               },
             });
           }
-          if (!steering && !state.isStreaming) {
+
+          const state = yield* Effect.gen(function* () {
+            yield* ctx.runtime.prompt({
+              message: text,
+              images,
+              ...(steering ? { streamingBehavior: "steer" as const } : {}),
+            });
+            return yield* ctx.runtime.getState();
+          }).pipe(
+            Effect.tapError((cause) =>
+              steering ? Effect.void : settleTurn(ctx, "failed", cause.message),
+            ),
+          );
+          ctx.currentModel = state.model ?? undefined;
+          ctx.currentThinkingLevel = state.thinkingLevel;
+          const model = piModelSlug(ctx.currentModel);
+          if (ctx.activeTurnId === turnId) {
+            ctx.session = {
+              ...ctx.session,
+              status: "running",
+              activeTurnId: turnId,
+              ...(model ? { model } : {}),
+              updatedAt: DateTime.formatIso(yield* DateTime.now),
+            };
+          }
+          if (!steering && !state.isStreaming && ctx.activeTurnId === turnId) {
             yield* settleTurn(ctx, "completed");
           }
           return {

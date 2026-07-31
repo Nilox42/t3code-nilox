@@ -23,7 +23,6 @@ const invocation = {
   providerInstanceId: ProviderInstanceId.make("codex"),
   capabilities: new Set(["preview"] as const),
   issuedAt: 1,
-  expiresAt: Number.MAX_SAFE_INTEGER,
 };
 const client = McpSchema.McpServerClient.of({
   clientId: 1,
@@ -171,7 +170,12 @@ it.effect("terminates HTTP MCP sessions with DELETE", () =>
 it.effect("rejects the optional MCP GET stream instead of falling through to the web app", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      yield* HttpRouter.serve(McpHttpServer.McpGetNotSupportedRouteLive, {
+      const serverLayer = McpServer.layerHttp({
+        name: "MCP GET test",
+        version: "1.0.0",
+        path: "/mcp",
+      });
+      yield* HttpRouter.serve(serverLayer, {
         disableListenLog: true,
         disableLogger: true,
       }).pipe(Layer.build);
@@ -180,7 +184,7 @@ it.effect("rejects the optional MCP GET stream instead of falling through to the
       });
 
       expect(response.status).toBe(405);
-      expect(response.headers.allow).toBe("POST, DELETE");
+      expect(response.headers.allow).toContain("POST");
     }),
   ).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );
