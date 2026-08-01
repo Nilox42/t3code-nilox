@@ -425,15 +425,30 @@ describe("PiAdapter lifecycle and event mapping", () => {
       });
 
       for (const input of ["First turn", "Second turn"]) {
-        const idle = yield* Stream.runHead(
+        const eventsFiber = yield* collectThrough(adapter.streamEvents, "turn.completed").pipe(
+          Effect.forkScoped,
+        );
+        const idleFiber = yield* Stream.runHead(
           Stream.filter(
             adapter.streamEvents,
             (event) => event.type === "thread.state.changed" && event.payload.state === "idle",
           ),
         ).pipe(Effect.forkScoped);
         yield* Effect.yieldNow;
-        yield* adapter.sendTurn({ threadId, input, modelSelection: selection });
-        yield* Fiber.join(idle);
+        const turn = yield* adapter.sendTurn({ threadId, input, modelSelection: selection });
+        const events = yield* Fiber.join(eventsFiber);
+        yield* Fiber.join(idleFiber);
+        expect(
+          events
+            .flatMap((event) =>
+              event.type === "content.delta" &&
+              event.turnId === turn.turnId &&
+              event.payload.streamKind === "assistant_text"
+                ? [event.payload.delta]
+                : [],
+            )
+            .join(""),
+        ).toContain("Mock title");
       }
 
       const requests = yield* readMockRequests(requestLog);

@@ -20,6 +20,7 @@ import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -124,7 +125,7 @@ interface PiSessionContext {
   readonly threadId: ThreadId;
   readonly scope: Scope.Closeable;
   readonly runtime: PiRpcSessionRuntime;
-  readonly eventQueue: Queue.Queue<PiNativeSignal>;
+  readonly eventQueue: Queue.Queue<PiSessionSignal>;
   eventFiber: Fiber.Fiber<void, never> | undefined;
   unsubscribeEvent: (() => void) | undefined;
   unsubscribeExit: (() => void) | undefined;
@@ -146,12 +147,17 @@ interface PiSessionContext {
   settledTurns: Set<TurnId>;
 }
 
-type PiNativeSignal =
+type PiSessionSignal =
   | { readonly type: "event"; readonly event: PiRpcEvent; readonly raw: unknown }
   | {
       readonly type: "exit";
       readonly code: number | null;
       readonly signal: NodeJS.Signals | null;
+    }
+  | {
+      readonly type: "settle-if-active";
+      readonly turnId: TurnId;
+      readonly completion: Deferred.Deferred<void>;
     };
 
 export interface PiAdapterOptions {
@@ -1242,25 +1248,35 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
         yield* Scope.close(ctx.scope, Exit.void).pipe(Effect.ignore);
       });
 
-    const handleSignal = (ctx: PiSessionContext, signal: PiNativeSignal) =>
-      signal.type === "event"
-        ? handleNativeEvent(ctx, signal.event, signal.raw).pipe(
+    const handleSignal = (ctx: PiSessionContext, signal: PiSessionSignal) => {
+      switch (signal.type) {
+        case "event":
+          return handleNativeEvent(ctx, signal.event, signal.raw).pipe(
             Effect.catch((cause) =>
-              Effect.gen(function* () {
-                yield* offer({
-                  type: "runtime.error",
-                  ...(yield* stamp),
-                  ...baseEvent(ctx),
-                  turnId: ctx.activeTurnId,
-                  payload: {
-                    class: "validation_error",
-                    message: cause.message,
-                  },
-                });
-              }),
+              stamp.pipe(
+                Effect.flatMap((eventStamp) =>
+                  offer({
+                    type: "runtime.error",
+                    ...eventStamp,
+                    ...baseEvent(ctx),
+                    turnId: ctx.activeTurnId,
+                    payload: {
+                      class: "validation_error",
+                      message: cause.message,
+                    },
+                  }),
+                ),
+              ),
             ),
-          )
-        : Effect.gen(function* () {
+          );
+        case "settle-if-active":
+          return (
+            ctx.activeTurnId === signal.turnId ? settleTurn(ctx, "completed") : Effect.void
+          ).pipe(
+            Effect.ensuring(Deferred.succeed(signal.completion, undefined).pipe(Effect.asVoid)),
+          );
+        case "exit":
+          return Effect.gen(function* () {
             if (ctx.stopped) return;
             if (
               ctx.activeTurnId === undefined &&
@@ -1296,6 +1312,24 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
             yield* Queue.shutdown(ctx.eventQueue);
             yield* Scope.close(ctx.scope, Exit.void).pipe(Effect.ignore);
           });
+      }
+    };
+
+    const settleAfterQueuedEvents = Effect.fn("PiAdapter.settleAfterQueuedEvents")(function* (
+      ctx: PiSessionContext,
+      turnId: TurnId,
+    ) {
+      const completion = yield* Deferred.make<void>();
+      const enqueued = yield* Queue.offer(ctx.eventQueue, {
+        type: "settle-if-active",
+        turnId,
+        completion,
+      });
+      if (!enqueued) return;
+      const eventFiber = ctx.eventFiber;
+      if (!eventFiber) return;
+      yield* Deferred.await(completion).pipe(Effect.raceFirst(Fiber.join(eventFiber)));
+    });
 
     const startSession: PiAdapterShape["startSession"] = (input) =>
       withThreadLock(
@@ -1467,7 +1501,7 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
             createdAt: now,
             updatedAt: now,
           };
-          const eventQueue = yield* Queue.unbounded<PiNativeSignal>();
+          const eventQueue = yield* Queue.unbounded<PiSessionSignal>();
           const ctx: PiSessionContext = {
             session,
             threadId: input.threadId,
@@ -1686,7 +1720,7 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
             };
           }
           if (!steering && !state.isStreaming && ctx.activeTurnId === turnId) {
-            yield* settleTurn(ctx, "completed");
+            yield* settleAfterQueuedEvents(ctx, turnId);
           }
           return {
             threadId: input.threadId,
