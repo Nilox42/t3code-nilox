@@ -86,6 +86,7 @@ function appendMessageEntry(role, content) {
   };
   entries.push(entry);
   persistHistory();
+  write({ type: "entry_appended", entry });
   return entry;
 }
 
@@ -581,6 +582,7 @@ input.on("line", (line) => {
         ...(request.images || []),
       ]);
       respond(request);
+      if (request.streamingBehavior === "steer") break;
       emitUiRequest();
       setTimeout(emitPromptEvents, Number(env.T3_PI_MOCK_PROMPT_DELAY_MS || 3));
       break;

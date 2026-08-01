@@ -89,7 +89,12 @@ const readMockRequests = Effect.fn("readPiMockRequests")(function* (requestLog: 
   return contents
     .split("\n")
     .filter(Boolean)
-    .map((line) => JSON.parse(line) as { readonly request: { readonly type?: string } });
+    .map(
+      (line) =>
+        JSON.parse(line) as {
+          readonly request: Readonly<Record<string, unknown> & { type?: string }>;
+        },
+    );
 });
 
 function isMcpBridgeUnavailableWarning(event: ProviderRuntimeEvent): boolean {
@@ -779,6 +784,91 @@ describe("PiAdapter lifecycle and event mapping", () => {
       expect(
         (yield* adapter.listSessions()).find((session) => session.threadId === threadId)?.status,
       ).toBe("ready");
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("rolls back a non-agent slash command without forking the preceding turn", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const requestLog = path.join(
+        yield* fileSystem.makeTempDirectory({ prefix: "pi-command-rollback-" }),
+        "requests.jsonl",
+      );
+      const { adapter } = yield* makeFixture({ T3_PI_MOCK_REQUEST_LOG: requestLog });
+      const threadId = ThreadId.make("pi-non-agent-command-rollback");
+      yield* adapter.startSession({
+        provider: PI,
+        threadId,
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+
+      const durableIdle = yield* Stream.runHead(
+        Stream.filter(
+          adapter.streamEvents,
+          (event) => event.type === "thread.state.changed" && event.payload.state === "idle",
+        ),
+      ).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+      yield* adapter.sendTurn({ threadId, input: "Keep this durable turn" });
+      yield* Fiber.join(durableIdle);
+
+      yield* adapter.sendTurn({ threadId, input: "/non-agent-command" });
+      expect((yield* adapter.readThread(threadId)).turns).toHaveLength(2);
+
+      const afterCommandRollback = yield* adapter.rollbackThread(threadId, 1);
+      expect(afterCommandRollback.turns).toHaveLength(1);
+      expect(
+        (yield* readMockRequests(requestLog)).filter(({ request }) => request.type === "fork"),
+      ).toHaveLength(0);
+
+      expect((yield* adapter.rollbackThread(threadId, 1)).turns).toEqual([]);
+      const fork = (yield* readMockRequests(requestLog)).findLast(
+        ({ request }) => request.type === "fork",
+      );
+      expect(fork?.request.entryId).toBe("pi-user-entry-1");
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("uses the first user entry when rolling back a steered T3 turn", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const requestLog = path.join(
+        yield* fileSystem.makeTempDirectory({ prefix: "pi-steer-rollback-" }),
+        "requests.jsonl",
+      );
+      const { adapter } = yield* makeFixture({
+        T3_PI_MOCK_PROMPT_DELAY_MS: "50",
+        T3_PI_MOCK_REQUEST_LOG: requestLog,
+      });
+      const threadId = ThreadId.make("pi-steer-rollback");
+      yield* adapter.startSession({
+        provider: PI,
+        threadId,
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      const idle = yield* Stream.runHead(
+        Stream.filter(
+          adapter.streamEvents,
+          (event) => event.type === "thread.state.changed" && event.payload.state === "idle",
+        ),
+      ).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+
+      const initial = yield* adapter.sendTurn({ threadId, input: "Initial prompt" });
+      const steering = yield* adapter.sendTurn({ threadId, input: "Steering message" });
+      expect(steering.turnId).toBe(initial.turnId);
+      yield* Fiber.join(idle);
+
+      expect((yield* adapter.readThread(threadId)).turns).toHaveLength(1);
+      expect((yield* adapter.rollbackThread(threadId, 1)).turns).toEqual([]);
+      const fork = (yield* readMockRequests(requestLog)).findLast(
+        ({ request }) => request.type === "fork",
+      );
+      expect(fork?.request.entryId).toBe("pi-user-entry-1");
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 

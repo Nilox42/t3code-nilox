@@ -81,6 +81,7 @@ interface PiTurnRecord {
   readonly id: TurnId;
   items: Array<unknown>;
   userEntryId?: string;
+  hasSessionEntries?: boolean;
 }
 
 type PendingUi =
@@ -666,21 +667,6 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
         }
       });
 
-    const captureLatestUserEntry = (ctx: PiSessionContext, turnId: TurnId) =>
-      Effect.gen(function* () {
-        const entries = yield* ctx.runtime.getEntries().pipe(Effect.orElseSucceed(() => undefined));
-        if (!entries) return;
-        const userEntries = entries.entries.flatMap((entry) => {
-          if (!isRecord(entry) || entry.type !== "message" || typeof entry.id !== "string")
-            return [];
-          const message = entry.message;
-          return isRecord(message) && message.role === "user" ? [{ id: entry.id }] : [];
-        });
-        const latest = userEntries.at(-1);
-        const turn = ctx.turns.find((candidate) => candidate.id === turnId);
-        if (turn && latest) turn.userEntryId = latest.id;
-      });
-
     const settleTurn = (
       ctx: PiSessionContext,
       state: "completed" | "failed" | "interrupted",
@@ -712,7 +698,6 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
             },
           });
         }
-        yield* captureLatestUserEntry(ctx, turnId);
         yield* refreshResumeCursor(ctx).pipe(Effect.ignore);
         ctx.activeTurnId = undefined;
         ctx.interruptingTurnId = undefined;
@@ -957,6 +942,25 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
         }
         const turnId = ctx.activeTurnId;
         switch (event.type) {
+          case "entry_appended": {
+            if (!turnId) return;
+            const turn = ctx.turns.find((candidate) => candidate.id === turnId);
+            if (!turn) return;
+            turn.hasSessionEntries = true;
+            const entry = event.entry;
+            if (!isRecord(entry) || entry.type !== "message") return;
+            const entryId = nonEmpty(entry.id);
+            const message = entry.message;
+            if (
+              turn.userEntryId === undefined &&
+              entryId !== undefined &&
+              isRecord(message) &&
+              message.role === "user"
+            ) {
+              turn.userEntryId = entryId;
+            }
+            return;
+          }
           case "session_info_changed": {
             const name = nonEmpty(event.name);
             yield* offer({
@@ -1793,23 +1797,37 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
               detail: "Pi rollback requires the session to be idle.",
             });
           }
-          const firstRemoved = ctx.turns[ctx.turns.length - numTurns];
-          if (!firstRemoved?.userEntryId) {
+          const removedTurns = ctx.turns.slice(-numTurns);
+          const firstDurableIndex = removedTurns.findIndex(
+            (turn) => turn.userEntryId !== undefined,
+          );
+          const cursorlessPrefix =
+            firstDurableIndex < 0 ? removedTurns : removedTurns.slice(0, firstDurableIndex);
+          const unsafeCursorlessTurn = cursorlessPrefix.find(
+            (turn) => turn.hasSessionEntries === true,
+          );
+          if (unsafeCursorlessTurn) {
             return yield* new ProviderAdapterRequestError({
               provider: PROVIDER,
               method: "fork",
-              detail: "Pi rollback is missing the durable user entry cursor.",
+              detail:
+                "Pi rollback cannot remove session history that has no durable user entry cursor.",
             });
           }
-          const result = yield* ctx.runtime.fork(firstRemoved.userEntryId);
-          if (result.cancelled) {
-            return yield* new ProviderAdapterRequestError({
-              provider: PROVIDER,
-              method: "fork",
-              detail: "A Pi extension cancelled the rollback fork.",
-            });
+
+          const firstDurableTurn =
+            firstDurableIndex < 0 ? undefined : removedTurns[firstDurableIndex];
+          if (firstDurableTurn?.userEntryId) {
+            const result = yield* ctx.runtime.fork(firstDurableTurn.userEntryId);
+            if (result.cancelled) {
+              return yield* new ProviderAdapterRequestError({
+                provider: PROVIDER,
+                method: "fork",
+                detail: "A Pi extension cancelled the rollback fork.",
+              });
+            }
+            yield* refreshResumeCursor(ctx);
           }
-          yield* refreshResumeCursor(ctx);
           ctx.turns = ctx.turns.slice(0, -numTurns);
           return { threadId, turns: ctx.turns };
         }).pipe(Effect.mapError((cause) => mapAdapterError("fork", cause))),
