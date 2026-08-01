@@ -42,41 +42,44 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
             <Text className="font-sans text-base leading-snug text-neutral-950 dark:text-neutral-50">
               {question.question}
             </Text>
-            <View className="flex-row flex-wrap gap-2.5">
-              {question.options.map((option) => {
-                const selected =
-                  draft?.selectedOptionLabel === option.label && !draft.customAnswer?.trim().length;
-                return (
-                  <Pressable
-                    key={option.label}
-                    className={cn(
-                      "rounded-full border px-3 py-2.5 ",
-                      selected
-                        ? "border-blue-300/50 bg-blue-50 dark:border-blue-400/28 dark:bg-blue-400/14"
-                        : "border-neutral-200 bg-white dark:border-white/6 dark:bg-neutral-950/70",
-                    )}
-                    onPress={() =>
-                      props.onSelectOption(
-                        props.pendingUserInput.requestId,
-                        question.id,
-                        option.label,
-                      )
-                    }
-                  >
-                    <Text
+            {question.options.length > 0 ? (
+              <View className="flex-row flex-wrap gap-2.5">
+                {question.options.map((option) => {
+                  const selected =
+                    draft?.selectedOptionLabel === option.label &&
+                    !draft.customAnswer?.trim().length;
+                  return (
+                    <Pressable
+                      key={option.label}
                       className={cn(
-                        "font-t3-bold text-sm",
+                        "rounded-full border px-3 py-2.5 ",
                         selected
-                          ? "text-sky-700 dark:text-sky-300"
-                          : "text-neutral-600 dark:text-neutral-300",
+                          ? "border-blue-300/50 bg-blue-50 dark:border-blue-400/28 dark:bg-blue-400/14"
+                          : "border-neutral-200 bg-white dark:border-white/6 dark:bg-neutral-950/70",
                       )}
+                      onPress={() =>
+                        props.onSelectOption(
+                          props.pendingUserInput.requestId,
+                          question.id,
+                          option.label,
+                        )
+                      }
                     >
-                      {option.label}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
+                      <Text
+                        className={cn(
+                          "font-t3-bold text-sm",
+                          selected
+                            ? "text-sky-700 dark:text-sky-300"
+                            : "text-neutral-600 dark:text-neutral-300",
+                        )}
+                      >
+                        {option.label}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            ) : null}
             <TextInput
               value={draft?.customAnswer ?? ""}
               onChangeText={(value) =>

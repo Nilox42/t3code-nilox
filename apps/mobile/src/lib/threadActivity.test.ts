@@ -13,6 +13,7 @@ import {
 
 import {
   buildThreadFeed,
+  derivePendingUserInputs,
   deriveThreadFeedPresentation,
   type ThreadFeedActivity,
   type ThreadFeedEntry,
@@ -54,6 +55,47 @@ function makeThread(
     settledAt: input.settledAt ?? null,
   };
 }
+
+describe("derivePendingUserInputs", () => {
+  it("keeps optionless text questions available for mobile responses", () => {
+    const pending = derivePendingUserInputs([
+      makeActivity({
+        id: EventId.make("pi-editor-request"),
+        kind: "user-input.requested",
+        summary: "Pi Agent requested input",
+        createdAt: "2026-04-01T00:00:00.000Z",
+        payload: {
+          requestId: "pi-editor-request",
+          questions: [
+            {
+              id: "answer",
+              header: "Editor",
+              question: "Update this content",
+              options: [],
+              multiSelect: false,
+            },
+          ],
+        },
+      }),
+    ]);
+
+    expect(pending).toEqual([
+      {
+        requestId: "pi-editor-request",
+        createdAt: "2026-04-01T00:00:00.000Z",
+        questions: [
+          {
+            id: "answer",
+            header: "Editor",
+            question: "Update this content",
+            options: [],
+            multiSelect: false,
+          },
+        ],
+      },
+    ]);
+  });
+});
 
 describe("buildThreadFeed", () => {
   it("keeps historic work entries attributed to their turns", () => {
