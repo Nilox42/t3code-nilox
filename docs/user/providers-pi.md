@@ -47,4 +47,4 @@ Permission modes map to Pi as follows:
 
 ## Current limitations
 
-Pi Agent support is Early Access. MCP/browser-tool injection and Pi-specific plan mode are deferred. User-installed Pi extensions may run in active sessions and their ordinary select, confirm, input, and editor dialogs are supported, but arbitrary custom widgets and TUI-only presentation APIs are not.
+Pi Agent support is Early Access. MCP/browser-tool injection and Pi-specific plan mode are deferred. User-installed Pi extensions may run in active sessions and their ordinary select, confirm, input, and editor dialogs are supported. Input placeholders and editor prefilled text appear in both web and mobile clients, and clearing prefilled text submits the empty value to the extension. Arbitrary custom widgets and TUI-only presentation APIs are not supported.

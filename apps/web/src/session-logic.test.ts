@@ -178,6 +178,45 @@ describe("derivePendingApprovals", () => {
 });
 
 describe("derivePendingUserInputs", () => {
+  it("preserves optionless text presentation metadata", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "user-input-editor",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "user-input.requested",
+        summary: "User input requested",
+        tone: "info",
+        payload: {
+          requestId: "req-user-input-editor",
+          questions: [
+            {
+              id: "answer",
+              header: "Editor",
+              question: "Update this content",
+              options: [],
+              placeholder: "Write the final content",
+              prefill: "Initial content",
+              multiSelect: false,
+            },
+          ],
+        },
+      }),
+    ];
+
+    expect(derivePendingUserInputs(activities)).toMatchObject([
+      {
+        questions: [
+          {
+            id: "answer",
+            options: [],
+            placeholder: "Write the final content",
+            prefill: "Initial content",
+          },
+        ],
+      },
+    ]);
+  });
+
   it("tracks open structured prompts and removes resolved ones", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

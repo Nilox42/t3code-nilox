@@ -12,6 +12,7 @@ import {
 } from "@t3tools/contracts";
 
 import {
+  buildPendingUserInputAnswers,
   buildThreadFeed,
   derivePendingUserInputs,
   deriveThreadFeedPresentation,
@@ -72,6 +73,8 @@ describe("derivePendingUserInputs", () => {
               header: "Editor",
               question: "Update this content",
               options: [],
+              placeholder: "Write the final content",
+              prefill: "Initial content",
               multiSelect: false,
             },
           ],
@@ -89,11 +92,36 @@ describe("derivePendingUserInputs", () => {
             header: "Editor",
             question: "Update this content",
             options: [],
+            placeholder: "Write the final content",
+            prefill: "Initial content",
             multiSelect: false,
           },
         ],
       },
     ]);
+  });
+});
+
+describe("buildPendingUserInputAnswers", () => {
+  const question = {
+    id: "answer",
+    header: "Editor",
+    question: "Update this content",
+    options: [],
+    placeholder: "Write the final content",
+    prefill: "Initial content",
+    multiSelect: false,
+  } as const;
+
+  it("uses prefill and preserves an explicitly cleared value", () => {
+    const { prefill: _prefill, ...questionWithoutPrefill } = question;
+    expect(buildPendingUserInputAnswers([question], {})).toEqual({ answer: "Initial content" });
+    expect(
+      buildPendingUserInputAnswers([question], {
+        answer: { customAnswer: "" },
+      }),
+    ).toEqual({ answer: "" });
+    expect(buildPendingUserInputAnswers([questionWithoutPrefill], {})).toBeNull();
   });
 });
 

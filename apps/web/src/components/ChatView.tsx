@@ -5056,8 +5056,8 @@ function ChatViewContent(props: ChatViewProps) {
     (
       questionId: string,
       value: string,
-      nextCursor: number,
-      expandedCursor: number,
+      _nextCursor: number,
+      _expandedCursor: number,
       _cursorAdjacentToMention: boolean,
     ) => {
       if (!activePendingUserInput) {
@@ -5074,16 +5074,8 @@ function ChatViewContent(props: ChatViewProps) {
           ),
         },
       }));
-      const snapshot = composerRef.current?.readSnapshot();
-      if (
-        snapshot?.value !== value ||
-        snapshot.cursor !== nextCursor ||
-        snapshot.expandedCursor !== expandedCursor
-      ) {
-        composerRef.current?.focusAt(nextCursor);
-      }
     },
-    [activePendingUserInput, composerRef],
+    [activePendingUserInput],
   );
 
   const onAdvanceActivePendingUserInput = useCallback(() => {

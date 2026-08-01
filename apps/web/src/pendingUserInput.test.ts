@@ -40,6 +40,16 @@ const multiSelectQuestion = {
   multiSelect: true,
 } as const;
 
+const editorQuestion = {
+  id: "answer",
+  header: "Editor",
+  question: "Edit the generated content",
+  options: [],
+  placeholder: "Write the final content",
+  prefill: "Generated content",
+  multiSelect: false,
+} as const;
+
 describe("resolvePendingUserInputAnswer", () => {
   it("prefers a custom answer over selected options", () => {
     expect(
@@ -77,6 +87,11 @@ describe("resolvePendingUserInputAnswer", () => {
     ).toEqual({
       customAnswer: "doesn't matter",
     });
+  });
+
+  it("uses editor prefill until the user explicitly clears it", () => {
+    expect(resolvePendingUserInputAnswer(editorQuestion, undefined)).toBe("Generated content");
+    expect(resolvePendingUserInputAnswer(editorQuestion, { customAnswer: "" })).toBe("");
   });
 });
 
@@ -152,6 +167,16 @@ describe("buildPendingUserInputAnswers", () => {
 
   it("returns null when any question is unanswered", () => {
     expect(buildPendingUserInputAnswers([singleSelectQuestion], {})).toBeNull();
+  });
+
+  it("keeps an explicitly empty answer for optionless text questions", () => {
+    const { prefill: _prefill, ...editorWithoutPrefill } = editorQuestion;
+    expect(
+      buildPendingUserInputAnswers([editorQuestion], {
+        answer: { customAnswer: "" },
+      }),
+    ).toEqual({ answer: "" });
+    expect(buildPendingUserInputAnswers([editorWithoutPrefill], {})).toBeNull();
   });
 });
 

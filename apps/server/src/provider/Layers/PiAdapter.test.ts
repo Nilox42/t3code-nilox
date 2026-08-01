@@ -1500,6 +1500,66 @@ describe("Pi approval policies and extension UI", () => {
     );
   }
 
+  it.effect("preserves text presentation and delivers an explicitly empty editor value", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const requestLog = path.join(
+        yield* fileSystem.makeTempDirectory({ prefix: "pi-editor-response-" }),
+        "requests.jsonl",
+      );
+      const { adapter } = yield* makeFixture({
+        T3_PI_MOCK_REQUEST_LOG: requestLog,
+        T3_PI_MOCK_UI: "editor",
+        T3_PI_MOCK_UI_PLACEHOLDER: "Edit the generated notes",
+        T3_PI_MOCK_UI_PREFILL: "Generated notes",
+      });
+      const threadId = ThreadId.make("pi-ui-editor-presentation");
+      yield* adapter.startSession({
+        provider: PI,
+        threadId,
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      const requestedFiber = yield* Stream.runHead(
+        Stream.filter(adapter.streamEvents, (event) => event.type === "user-input.requested"),
+      ).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+      yield* adapter.sendTurn({ threadId, input: "Ask me to edit" });
+      const requested = yield* Fiber.join(requestedFiber);
+
+      expect(requested._tag).toBe("Some");
+      if (requested._tag === "Some" && requested.value.type === "user-input.requested") {
+        expect(requested.value.payload.questions[0]).toMatchObject({
+          placeholder: "Edit the generated notes",
+          prefill: "Generated notes",
+        });
+      }
+
+      const missing = yield* Effect.flip(
+        adapter.respondToUserInput(threadId, ApprovalRequestId.make("pi-ui-editor"), {}),
+      );
+      expect(missing.message).toMatch(/missing answer/i);
+      const completedFiber = yield* Stream.runHead(
+        Stream.filter(adapter.streamEvents, (event) => event.type === "turn.completed"),
+      ).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+      yield* adapter.respondToUserInput(threadId, ApprovalRequestId.make("pi-ui-editor"), {
+        answer: "",
+      });
+      yield* Fiber.join(completedFiber);
+
+      const requests = yield* readMockRequests(requestLog);
+      expect(
+        requests.find((entry) => entry.request.type === "extension_ui_response")?.request,
+      ).toMatchObject({
+        type: "extension_ui_response",
+        id: "pi-ui-editor",
+        value: "",
+      });
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
   it.effect("cancels user input once when its Pi response cannot be delivered", () =>
     Effect.gen(function* () {
       const { adapter } = yield* makeFixture({

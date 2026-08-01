@@ -427,6 +427,8 @@ function emitUiRequest() {
     title: `Mock ${method} request`,
     message: method === "confirm" ? "Continue?" : undefined,
     options: method === "select" ? ["Alpha", "Beta"] : undefined,
+    placeholder: env.T3_PI_MOCK_UI_PLACEHOLDER,
+    prefill: env.T3_PI_MOCK_UI_PREFILL,
     timeout: env.T3_PI_MOCK_UI_TIMEOUT_MS ? Number(env.T3_PI_MOCK_UI_TIMEOUT_MS) : undefined,
   });
   closeStdinAfterUiRequest();

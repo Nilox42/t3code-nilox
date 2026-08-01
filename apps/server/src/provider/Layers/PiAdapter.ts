@@ -923,6 +923,8 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
                     ? `${title}\n${nonEmpty(event.message)}`
                     : title,
                 options,
+                ...(event.placeholder !== undefined ? { placeholder: event.placeholder } : {}),
+                ...(event.prefill !== undefined ? { prefill: event.prefill } : {}),
                 multiSelect: false,
               },
             ],
@@ -1764,7 +1766,7 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
             });
           }
           const answer = answerAsString(answers[pending.questionId]);
-          if (!answer) {
+          if (answer === undefined) {
             return yield* new ProviderAdapterValidationError({
               provider: PROVIDER,
               operation: "respondToUserInput",

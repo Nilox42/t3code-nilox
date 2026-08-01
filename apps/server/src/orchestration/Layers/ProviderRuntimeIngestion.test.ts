@@ -3427,6 +3427,8 @@ describe("ProviderRuntimeIngestion", () => {
             id: "sandbox_mode",
             header: "Sandbox",
             question: "Which mode should be used?",
+            placeholder: "Choose a sandbox mode",
+            prefill: "workspace-write",
             options: [
               {
                 label: "workspace-write",
@@ -3468,6 +3470,17 @@ describe("ProviderRuntimeIngestion", () => {
       (activity: ProviderRuntimeTestActivity) => activity.id === "evt-user-input-requested",
     );
     expect(requested?.kind).toBe("user-input.requested");
+    const requestedPayload =
+      requested?.payload && typeof requested.payload === "object"
+        ? (requested.payload as Record<string, unknown>)
+        : undefined;
+    expect(requestedPayload?.questions).toMatchObject([
+      {
+        id: "sandbox_mode",
+        placeholder: "Choose a sandbox mode",
+        prefill: "workspace-write",
+      },
+    ]);
 
     const resolved = thread.activities.find(
       (activity: ProviderRuntimeTestActivity) => activity.id === "evt-user-input-resolved",

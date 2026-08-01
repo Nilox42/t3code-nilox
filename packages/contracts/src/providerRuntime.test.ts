@@ -95,6 +95,14 @@ describe("ProviderRuntimeEvent", () => {
               },
             ],
           },
+          {
+            id: "release_notes",
+            header: "Editor",
+            question: "Edit the release notes",
+            options: [],
+            placeholder: "Describe the change",
+            prefill: "Initial notes",
+          },
         ],
       },
     });
@@ -105,6 +113,11 @@ describe("ProviderRuntimeEvent", () => {
     }
     expect(parsed.payload.questions[0]?.id).toBe("sandbox_mode");
     expect(parsed.payload.questions[0]?.options).toHaveLength(2);
+    expect(parsed.payload.questions[1]).toMatchObject({
+      id: "release_notes",
+      placeholder: "Describe the change",
+      prefill: "Initial notes",
+    });
   });
 
   it("decodes user-input.resolved with answer map", () => {
