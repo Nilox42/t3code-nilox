@@ -1384,6 +1384,9 @@ describe("Pi approval policies and extension UI", () => {
       expect(opened._tag).toBe("Some");
       if (opened._tag === "Some" && opened.value.type === "request.opened") {
         expect(opened.value.payload.requestType).toBe("command_execution_approval");
+        expect(opened.value.payload.detail).toContain(
+          "Accept for session allows future bash calls for this Pi process",
+        );
       }
       yield* adapter.respondToRequest(
         threadId,

@@ -43,7 +43,7 @@ Permission modes map to Pi as follows:
 - **Approval required** asks for every tool.
 - **Auto** also asks for every tool because Pi does not expose an automatic permission classifier.
 
-“Accept for session” is cached only inside the active Pi process. Declining or cancelling returns a blocked tool result to Pi.
+“Accept for session” allows future calls to that exact tool name only inside the active Pi process. The approval request states this scope; other tools continue to ask. Declining or cancelling returns a blocked tool result to Pi.
 
 ## Current limitations
 

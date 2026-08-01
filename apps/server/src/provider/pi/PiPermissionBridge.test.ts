@@ -98,7 +98,7 @@ async function loadBridge(): Promise<{
 }
 
 describe("Pi permission bridge extension", () => {
-  it("caches accepted tool categories for the Pi process", async () => {
+  it("caches only the accepted tool name for the Pi process", async () => {
     process.env.T3_PI_RUNTIME_MODE = "approval-required";
     const { toolCall: handler } = await loadBridge();
     let prompts = 0;
@@ -110,15 +110,13 @@ describe("Pi permission bridge extension", () => {
         },
       },
     };
-    const event = {
-      toolCallId: "bash-1",
-      toolName: "bash",
-      input: { command: "echo test" },
-    };
+    const firstTool = { toolCallId: "custom-1", toolName: "safe_custom", input: {} };
+    const secondTool = { toolCallId: "custom-2", toolName: "other_custom", input: {} };
 
-    expect(await handler(event, context)).toBeUndefined();
-    expect(await handler({ ...event, toolCallId: "bash-2" }, context)).toBeUndefined();
-    expect(prompts).toBe(1);
+    expect(await handler(firstTool, context)).toBeUndefined();
+    expect(await handler(secondTool, context)).toBeUndefined();
+    expect(await handler({ ...firstTool, toolCallId: "custom-3" }, context)).toBeUndefined();
+    expect(prompts).toBe(2);
   });
 
   it("allows safe categories by policy and blocks decline or cancellation", async () => {

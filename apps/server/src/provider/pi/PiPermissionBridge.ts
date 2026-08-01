@@ -2,7 +2,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
-export const PI_PERMISSION_BRIDGE_VERSION = 3;
+export const PI_PERMISSION_BRIDGE_VERSION = 4;
 export const PI_PERMISSION_BRIDGE_MARKER = "__T3_PI_APPROVAL_V1__:";
 export const PI_MCP_STATUS_BRIDGE_MARKER = "__T3_PI_MCP_STATUS_V1__:";
 
@@ -78,7 +78,7 @@ function sanitizeMcpStatus(snapshot) {
 }
 
 export default function (pi) {
-  const approvedCategories = new Set();
+  const approvedTools = new Set();
   let sessionContext;
   let latestMcpStatus;
   const publishMcpStatus = (snapshot) => {
@@ -114,7 +114,7 @@ export default function (pi) {
     if (mode === "auto-accept-edits" && (category === "read" || category === "edit")) {
       return undefined;
     }
-    if (approvedCategories.has(category)) return undefined;
+    if (approvedTools.has(event.toolName)) return undefined;
     const marker = MARKER + JSON.stringify({
       toolCallId: event.toolCallId,
       toolName: event.toolName,
@@ -127,7 +127,7 @@ export default function (pi) {
       "Decline",
     ]);
     if (choice === "Accept for session") {
-      approvedCategories.add(category);
+      approvedTools.add(event.toolName);
       return undefined;
     }
     if (choice === "Accept once") return undefined;

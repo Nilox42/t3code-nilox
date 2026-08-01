@@ -94,7 +94,6 @@ type PendingUi =
         | "file_read_approval"
         | "file_change_approval"
         | "dynamic_tool_call";
-      readonly toolCategory: string;
       timeoutHandle: NodeJS.Timeout | undefined;
     }
   | {
@@ -365,7 +364,6 @@ function parseBridgeMarker(title: string | undefined):
   | {
       readonly toolCallId?: string;
       readonly toolName: string;
-      readonly category: string;
       readonly input: unknown;
     }
   | undefined {
@@ -376,7 +374,6 @@ function parseBridgeMarker(title: string | undefined):
     return {
       ...(typeof decoded.toolCallId === "string" ? { toolCallId: decoded.toolCallId } : {}),
       toolName: decoded.toolName,
-      category: typeof decoded.category === "string" ? decoded.category : "custom",
       input: decoded.input,
     };
   } catch {
@@ -863,7 +860,6 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
             piRequestId,
             requestId,
             requestType,
-            toolCategory: marker.category,
             timeoutHandle: undefined,
           };
           ctx.pendingUi.set(requestId, pending);
@@ -877,7 +873,7 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
             requestId: RuntimeRequestId.make(requestId),
             payload: {
               requestType,
-              detail: `${marker.toolName} requires approval.`,
+              detail: `${marker.toolName} requires approval. Accept for session allows future ${marker.toolName} calls for this Pi process.`,
               args: marker.input,
             },
             ...raw(rawPayload, "extension_ui_request"),
