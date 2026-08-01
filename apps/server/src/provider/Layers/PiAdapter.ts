@@ -1614,6 +1614,12 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
 
           const steering = ctx.activeTurnId !== undefined;
           const turnId = ctx.activeTurnId ?? TurnId.make(yield* nextUuid);
+          const selection =
+            input.modelSelection?.instanceId === boundInstanceId ? input.modelSelection : undefined;
+          if (selection) {
+            yield* applyModelSelection(ctx, selection);
+          }
+
           if (!steering) {
             ctx.turns.push({ id: turnId, items: [] });
             ctx.toolUses = 0;
@@ -1623,12 +1629,6 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
             ctx.assistantMessageSequence = 0;
             ctx.activeAssistantMessageSequence = undefined;
             ctx.assistantBlocks.clear();
-          }
-
-          const selection =
-            input.modelSelection?.instanceId === boundInstanceId ? input.modelSelection : undefined;
-          if (selection) {
-            yield* applyModelSelection(ctx, selection);
           }
 
           const startingModel = piModelSlug(ctx.currentModel);

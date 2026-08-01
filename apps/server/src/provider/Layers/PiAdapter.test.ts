@@ -439,6 +439,7 @@ describe("PiAdapter lifecycle and event mapping", () => {
         adapter.sendTurn({ threadId, input: "Fails authentication", modelSelection: selection }),
       );
       expect(error.message).toMatch(/injected set_model failure/i);
+      expect((yield* adapter.readThread(threadId)).turns).toEqual([]);
 
       const idle = yield* Stream.runHead(
         Stream.filter(
@@ -462,6 +463,8 @@ describe("PiAdapter lifecycle and event mapping", () => {
       expect(
         (yield* adapter.listSessions()).find((session) => session.threadId === threadId)?.model,
       ).toBe("mock-provider/recovered-model");
+      expect((yield* adapter.readThread(threadId)).turns).toHaveLength(1);
+      expect((yield* adapter.rollbackThread(threadId, 1)).turns).toEqual([]);
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
