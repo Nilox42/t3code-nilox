@@ -599,6 +599,9 @@ export const makePiRpcSessionRuntime = Effect.fn("makePiRpcSessionRuntime")(func
   child.stderr.on("data", (chunk: Buffer) => {
     stderr = `${stderr}${chunk.toString("utf8")}`.slice(-MAX_STDERR_CHARS);
   });
+  child.stdin.on("error", (cause) => {
+    rejectOutstanding(asPiRpcError("process", "Pi stdin failed.", cause, boundedStderr()));
+  });
   child.on("error", (cause) => {
     rejectOutstanding(asPiRpcError("process", "Pi process failed.", cause, boundedStderr()));
   });
@@ -786,17 +789,41 @@ export const makePiRpcSessionRuntime = Effect.fn("makePiRpcSessionRuntime")(func
     getLastAssistantText: () =>
       commandEffect("get_last_assistant_text", {}, (data) => decodeLastAssistantText(data).text),
     respondToExtensionUi: (response) =>
-      Effect.try({
-        try: () => {
-          if (closed || !child.stdin.writable) {
-            throw asPiRpcError("extension_ui_response", "Pi process is no longer writable.");
-          }
-          child.stdin.write(`${JSON.stringify({ type: "extension_ui_response", ...response })}\n`);
-        },
-        catch: (cause) =>
-          isPiRpcError(cause)
-            ? cause
-            : asPiRpcError("extension_ui_response", "Failed writing extension response.", cause),
+      Effect.callback<void, PiRpcError>((resume) => {
+        if (terminalError) {
+          resume(Effect.fail(terminalError));
+          return;
+        }
+        if (closed || !child.stdin.writable) {
+          resume(
+            Effect.fail(asPiRpcError("extension_ui_response", "Pi process is no longer writable.")),
+          );
+          return;
+        }
+        try {
+          child.stdin.write(
+            `${JSON.stringify({ type: "extension_ui_response", ...response })}\n`,
+            (cause) => {
+              resume(
+                cause
+                  ? Effect.fail(
+                      asPiRpcError(
+                        "extension_ui_response",
+                        "Failed writing extension response.",
+                        cause,
+                      ),
+                    )
+                  : Effect.void,
+              );
+            },
+          );
+        } catch (cause) {
+          resume(
+            Effect.fail(
+              asPiRpcError("extension_ui_response", "Failed writing extension response.", cause),
+            ),
+          );
+        }
       }),
     onEvent: (listener) => {
       listeners.add(listener);

@@ -1709,67 +1709,85 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
       );
 
     const respondToRequest: PiAdapterShape["respondToRequest"] = (threadId, requestId, decision) =>
-      Effect.gen(function* () {
-        const ctx = yield* requireSession(threadId);
-        const pending = ctx.pendingUi.get(requestId);
-        if (!pending || pending.kind !== "approval") {
-          return yield* new ProviderAdapterRequestError({
-            provider: PROVIDER,
-            method: "extension_ui_response",
-            detail: `Unknown Pi approval request '${requestId}'.`,
+      withThreadLock(
+        threadId,
+        Effect.gen(function* () {
+          const ctx = yield* requireSession(threadId);
+          const pending = ctx.pendingUi.get(requestId);
+          if (!pending || pending.kind !== "approval") {
+            return yield* new ProviderAdapterRequestError({
+              provider: PROVIDER,
+              method: "extension_ui_response",
+              detail: `Unknown Pi approval request '${requestId}'.`,
+            });
+          }
+          const response = piApprovalExtensionResponse(pending.piRequestId, decision);
+          yield* ctx.runtime.respondToExtensionUi(response).pipe(
+            Effect.tapError(() => {
+              const failed = takePendingUi(ctx, requestId);
+              return failed ? emitPendingUiResolved(ctx, failed) : Effect.void;
+            }),
+          );
+          if (!takePendingUi(ctx, requestId)) return;
+          yield* offer({
+            type: "request.resolved",
+            ...(yield* stamp),
+            ...baseEvent(ctx),
+            turnId: ctx.activeTurnId,
+            requestId: RuntimeRequestId.make(requestId),
+            payload: { requestType: pending.requestType, decision },
           });
-        }
-        takePendingUi(ctx, requestId);
-        const response = piApprovalExtensionResponse(pending.piRequestId, decision);
-        yield* ctx.runtime.respondToExtensionUi(response);
-        yield* offer({
-          type: "request.resolved",
-          ...(yield* stamp),
-          ...baseEvent(ctx),
-          turnId: ctx.activeTurnId,
-          requestId: RuntimeRequestId.make(requestId),
-          payload: { requestType: pending.requestType, decision },
-        });
-      }).pipe(Effect.mapError((cause) => mapAdapterError("extension_ui_response", cause)));
+        }),
+      ).pipe(Effect.mapError((cause) => mapAdapterError("extension_ui_response", cause)));
 
     const respondToUserInput: PiAdapterShape["respondToUserInput"] = (
       threadId,
       requestId,
       answers,
     ) =>
-      Effect.gen(function* () {
-        const ctx = yield* requireSession(threadId);
-        const pending = ctx.pendingUi.get(requestId);
-        if (!pending || pending.kind !== "user-input") {
-          return yield* new ProviderAdapterRequestError({
-            provider: PROVIDER,
-            method: "extension_ui_response",
-            detail: `Unknown Pi user-input request '${requestId}'.`,
+      withThreadLock(
+        threadId,
+        Effect.gen(function* () {
+          const ctx = yield* requireSession(threadId);
+          const pending = ctx.pendingUi.get(requestId);
+          if (!pending || pending.kind !== "user-input") {
+            return yield* new ProviderAdapterRequestError({
+              provider: PROVIDER,
+              method: "extension_ui_response",
+              detail: `Unknown Pi user-input request '${requestId}'.`,
+            });
+          }
+          const answer = answerAsString(answers[pending.questionId]);
+          if (!answer) {
+            return yield* new ProviderAdapterValidationError({
+              provider: PROVIDER,
+              operation: "respondToUserInput",
+              issue: `Missing answer for '${pending.questionId}'.`,
+            });
+          }
+          yield* ctx.runtime
+            .respondToExtensionUi(
+              pending.method === "confirm"
+                ? { id: pending.piRequestId, confirmed: answer.toLowerCase() === "yes" }
+                : { id: pending.piRequestId, value: answer },
+            )
+            .pipe(
+              Effect.tapError(() => {
+                const failed = takePendingUi(ctx, requestId);
+                return failed ? emitPendingUiResolved(ctx, failed) : Effect.void;
+              }),
+            );
+          if (!takePendingUi(ctx, requestId)) return;
+          yield* offer({
+            type: "user-input.resolved",
+            ...(yield* stamp),
+            ...baseEvent(ctx),
+            turnId: ctx.activeTurnId,
+            requestId: RuntimeRequestId.make(requestId),
+            payload: { answers },
           });
-        }
-        const answer = answerAsString(answers[pending.questionId]);
-        if (!answer) {
-          return yield* new ProviderAdapterValidationError({
-            provider: PROVIDER,
-            operation: "respondToUserInput",
-            issue: `Missing answer for '${pending.questionId}'.`,
-          });
-        }
-        takePendingUi(ctx, requestId);
-        yield* ctx.runtime.respondToExtensionUi(
-          pending.method === "confirm"
-            ? { id: pending.piRequestId, confirmed: answer.toLowerCase() === "yes" }
-            : { id: pending.piRequestId, value: answer },
-        );
-        yield* offer({
-          type: "user-input.resolved",
-          ...(yield* stamp),
-          ...baseEvent(ctx),
-          turnId: ctx.activeTurnId,
-          requestId: RuntimeRequestId.make(requestId),
-          payload: { answers },
-        });
-      }).pipe(Effect.mapError((cause) => mapAdapterError("extension_ui_response", cause)));
+        }),
+      ).pipe(Effect.mapError((cause) => mapAdapterError("extension_ui_response", cause)));
 
     const readThread: PiAdapterShape["readThread"] = (threadId) =>
       Effect.map(requireSession(threadId), (ctx) => ({ threadId, turns: ctx.turns }));

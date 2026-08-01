@@ -1399,6 +1399,46 @@ describe("Pi approval policies and extension UI", () => {
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
+  it.effect("cancels an approval once when its Pi response cannot be delivered", () =>
+    Effect.gen(function* () {
+      const { adapter } = yield* makeFixture({
+        T3_PI_MOCK_CLOSE_STDIN_AFTER_UI: "1",
+        T3_PI_MOCK_PROMPT_DELAY_MS: "500",
+        T3_PI_MOCK_UI: "approval",
+      });
+      const threadId = ThreadId.make("pi-approval-delivery-failure");
+      yield* adapter.startSession({
+        provider: PI,
+        threadId,
+        cwd: process.cwd(),
+        runtimeMode: "approval-required",
+      });
+      const warningFiber = yield* Stream.runHead(
+        Stream.filter(
+          adapter.streamEvents,
+          (event) =>
+            event.type === "runtime.warning" && event.payload.message === "Mock Pi stdin closed.",
+        ),
+      ).pipe(Effect.forkScoped);
+      const resolvedFiber = yield* Stream.runHead(
+        Stream.filter(adapter.streamEvents, (event) => event.type === "request.resolved"),
+      ).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+      yield* adapter.sendTurn({ threadId, input: "Use a tool" });
+      yield* Fiber.join(warningFiber);
+
+      const error = yield* Effect.flip(
+        adapter.respondToRequest(threadId, ApprovalRequestId.make("pi-ui-approval"), "accept"),
+      );
+      expect(error.message).toMatch(/writable|writing extension response|stdin failed/i);
+      const resolved = yield* Fiber.join(resolvedFiber);
+      expect(resolved._tag).toBe("Some");
+      if (resolved._tag === "Some" && resolved.value.type === "request.resolved") {
+        expect(resolved.value.payload.decision).toBe("cancel");
+      }
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
   for (const method of ["select", "confirm", "input", "editor"] as const) {
     it.effect(`maps an extension ${method} dialog to structured user input`, () =>
       Effect.gen(function* () {
@@ -1427,6 +1467,48 @@ describe("Pi approval policies and extension UI", () => {
       }).pipe(Effect.scoped, Effect.provide(testLayer)),
     );
   }
+
+  it.effect("cancels user input once when its Pi response cannot be delivered", () =>
+    Effect.gen(function* () {
+      const { adapter } = yield* makeFixture({
+        T3_PI_MOCK_CLOSE_STDIN_AFTER_UI: "1",
+        T3_PI_MOCK_PROMPT_DELAY_MS: "500",
+        T3_PI_MOCK_UI: "input",
+      });
+      const threadId = ThreadId.make("pi-input-delivery-failure");
+      yield* adapter.startSession({
+        provider: PI,
+        threadId,
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      const warningFiber = yield* Stream.runHead(
+        Stream.filter(
+          adapter.streamEvents,
+          (event) =>
+            event.type === "runtime.warning" && event.payload.message === "Mock Pi stdin closed.",
+        ),
+      ).pipe(Effect.forkScoped);
+      const resolvedFiber = yield* Stream.runHead(
+        Stream.filter(adapter.streamEvents, (event) => event.type === "user-input.resolved"),
+      ).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+      yield* adapter.sendTurn({ threadId, input: "Ask me" });
+      yield* Fiber.join(warningFiber);
+
+      const error = yield* Effect.flip(
+        adapter.respondToUserInput(threadId, ApprovalRequestId.make("pi-ui-input"), {
+          answer: "Alpha",
+        }),
+      );
+      expect(error.message).toMatch(/writable|writing extension response|stdin failed/i);
+      const resolved = yield* Fiber.join(resolvedFiber);
+      expect(resolved._tag).toBe("Some");
+      if (resolved._tag === "Some" && resolved.value.type === "user-input.resolved") {
+        expect(resolved.value.payload.answers).toEqual({});
+      }
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
 
   it.effect("resolves a timed extension dialog once when Pi's timeout expires", () =>
     Effect.gen(function* () {

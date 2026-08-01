@@ -404,6 +404,7 @@ function emitUiRequest() {
       title: marker,
       options: ["Accept once", "Accept for session", "Decline"],
     });
+    closeStdinAfterUiRequest();
     return;
   }
   write({
@@ -415,6 +416,26 @@ function emitUiRequest() {
     options: method === "select" ? ["Alpha", "Beta"] : undefined,
     timeout: env.T3_PI_MOCK_UI_TIMEOUT_MS ? Number(env.T3_PI_MOCK_UI_TIMEOUT_MS) : undefined,
   });
+  closeStdinAfterUiRequest();
+}
+
+function closeStdinAfterUiRequest() {
+  if (env.T3_PI_MOCK_CLOSE_STDIN_AFTER_UI !== "1") return;
+  setTimeout(() => {
+    input.close();
+    NodeFS.closeSync(0);
+    setTimeout(
+      () =>
+        write({
+          type: "extension_ui_request",
+          id: "pi-ui-stdin-closed",
+          method: "notify",
+          message: "Mock Pi stdin closed.",
+          notifyType: "warning",
+        }),
+      25,
+    );
+  }, 25);
 }
 
 function logRequest(request) {
