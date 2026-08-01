@@ -45,6 +45,26 @@ Permission modes map to Pi as follows:
 
 “Accept for session” allows future calls to that exact tool name only inside the active Pi process. The approval request states this scope; other tools continue to ask. Declining or cancelling returns a blocked tool result to Pi.
 
+## Collaborative browser tools
+
+Core Pi Agent support does not require an MCP adapter. To let Pi use T3 Code's collaborative browser, install the compatible adapter in the Pi agent directory used by the provider instance:
+
+```bash
+pi install npm:pi-mcp-adapter
+```
+
+The default agent directory is `~/.pi/agent`. If the provider's **Agent directory** setting points somewhere else, install the adapter with that same `PI_CODING_AGENT_DIR`; installations are separate for each agent directory. For example:
+
+```bash
+PI_CODING_AGENT_DIR=/path/to/pi-agent pi install npm:pi-mcp-adapter
+```
+
+Restart the T3 Code server after installing the adapter. For the desktop app, restart the desktop host. T3 Code then prepares a per-provider MCP configuration, preserves servers from the agent directory's existing `mcp.json`, and gives Pi direct access only to tools whose names begin with `preview_`. These tools can open and navigate the thread's shared preview, inspect pages, interact with elements, resize the viewport, and capture screenshots or recordings. The generated configuration refers to a per-thread bearer token through an environment variable; it does not store that token on disk.
+
+The adapter and its configuration live on the machine running the T3 Code server and Pi process. Local, LAN, remote/relay, and tunnel clients all use the same server-side bridge, so they do not need another adapter installation or a separately exposed MCP port. Browser actions are routed to an automation-capable collaborative preview connected to that environment. If no capable preview host is connected, the `preview_*` call reports that none is available.
+
+If the adapter is missing, Pi remains ready for normal coding and T3 Code reports that collaborative browser tools are unavailable with the install command above. If an existing `mcp.json` cannot be read, Pi also remains usable; check the server logs and the JSON configuration in the active agent directory, correct it, and restart T3 Code. Changing the provider's agent directory also requires installing the adapter there and restarting the server.
+
 ## Current limitations
 
-Pi Agent support is Early Access. MCP/browser-tool injection and Pi-specific plan mode are deferred. User-installed Pi extensions may run in active sessions and their ordinary select, confirm, input, and editor dialogs are supported. Input placeholders and editor prefilled text appear in both web and mobile clients, and clearing prefilled text submits the empty value to the extension. Arbitrary custom widgets and TUI-only presentation APIs are not supported.
+Pi Agent support is Early Access. Pi-specific plan mode is deferred. User-installed Pi extensions may run in active sessions and their ordinary select, confirm, input, and editor dialogs are supported. Input placeholders and editor prefilled text appear in both web and mobile clients, and clearing prefilled text submits the empty value to the extension. Arbitrary custom widgets and TUI-only presentation APIs are not supported.

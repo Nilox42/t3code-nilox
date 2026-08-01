@@ -180,7 +180,7 @@ describe("Pi Agent provider probe", () => {
     }),
   );
 
-  it.effect("warns authenticated users when Pi lacks the browser MCP capability", () =>
+  it.effect("keeps authenticated Pi ready when the optional browser bridge is unavailable", () =>
     Effect.gen(function* () {
       const provider = yield* runStatus({}, undefined, {
         available: false,
@@ -189,7 +189,8 @@ describe("Pi Agent provider probe", () => {
       });
 
       expect(provider.auth.status).toBe("authenticated");
-      expect(provider.status).toBe("warning");
+      expect(provider.status).toBe("ready");
+      expect(provider.message).toMatch(/Pi Agent 0\.82\.1 is ready/);
       expect(provider.message).toMatch(/MCP adapter/);
       expect(provider.models).not.toHaveLength(0);
     }),

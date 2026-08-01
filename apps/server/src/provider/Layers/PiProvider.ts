@@ -324,21 +324,16 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
     skills: commandCatalog.skills,
     probe:
       models.length > 0
-        ? mcpBridge && !mcpBridge.available
-          ? {
-              installed: true,
-              version,
-              status: "warning",
-              auth: { status: "authenticated" },
-              message: mcpBridge.message,
-            }
-          : {
-              installed: true,
-              version,
-              status: "ready",
-              auth: { status: "authenticated" },
-              message: `Pi Agent ${version} is ready.`,
-            }
+        ? {
+            installed: true,
+            version,
+            status: "ready",
+            auth: { status: "authenticated" },
+            message:
+              mcpBridge && !mcpBridge.available
+                ? `Pi Agent ${version} is ready. ${mcpBridge.message}`
+                : `Pi Agent ${version} is ready.`,
+          }
         : {
             installed: true,
             version,
