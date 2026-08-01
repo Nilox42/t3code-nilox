@@ -65,6 +65,13 @@ const failedOnceCommands = new Set();
 const outputQueue = [];
 let outputWriting = false;
 
+if (env.T3_PI_MOCK_IGNORE_SIGTERM === "1") {
+  process.on("SIGTERM", () => {
+    process.stderr.write("Mock Pi ignored SIGTERM.\n");
+  });
+  setInterval(() => {}, 60_000);
+}
+
 if (!args.includes("--no-session")) {
   NodeFS.mkdirSync(NodePath.dirname(sessionFile), { recursive: true });
   NodeFS.closeSync(NodeFS.openSync(sessionFile, "a"));
@@ -151,6 +158,12 @@ function respond(request, data, extra = {}) {
     ...(data === undefined ? {} : { data }),
     ...extra,
   });
+  if (env.T3_PI_MOCK_EXIT_AFTER_RESPONSE === request.type) {
+    setTimeout(
+      () => process.exit(Number(env.T3_PI_MOCK_EXIT_AFTER_RESPONSE_CODE || 0)),
+      Number(env.T3_PI_MOCK_EXIT_AFTER_RESPONSE_DELAY_MS || 10),
+    );
+  }
 }
 
 function mockUsage(prefix, defaults) {

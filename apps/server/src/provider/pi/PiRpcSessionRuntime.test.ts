@@ -44,6 +44,7 @@ const model: PiModel = {
 const makeRuntime = Effect.fn("makePiMockRuntime")(function* (
   environment: NodeJS.ProcessEnv = {},
   requestTimeoutMs = 1_000,
+  shutdownGraceMs = 750,
 ) {
   const path = yield* Path.Path;
   const binaryPath = yield* path.fromFileUrl(
@@ -54,6 +55,7 @@ const makeRuntime = Effect.fn("makePiMockRuntime")(function* (
     cwd: process.cwd(),
     environment: { ...process.env, ...environment },
     requestTimeoutMs,
+    shutdownGraceMs,
     noSession: true,
     trustProjectResources: false,
   });
@@ -249,6 +251,50 @@ describe("Pi RPC JSONL runtime", () => {
 
       expect(error.operation).toBe("process");
       expect(error.detail).toMatch(/exited unexpectedly/i);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("replays the terminal exit once to a late listener", () =>
+    Effect.gen(function* () {
+      const runtime = yield* makeRuntime({
+        T3_PI_MOCK_EXIT_AFTER_RESPONSE: "get_state",
+        T3_PI_MOCK_EXIT_AFTER_RESPONSE_CODE: "27",
+      });
+      let observeExit!: (exit: {
+        readonly code: number | null;
+        readonly signal: NodeJS.Signals | null;
+      }) => void;
+      const exitObserved = new Promise<{
+        readonly code: number | null;
+        readonly signal: NodeJS.Signals | null;
+      }>((resolve) => {
+        observeExit = resolve;
+      });
+      runtime.onExit(observeExit);
+      yield* runtime.getState();
+      yield* Effect.promise(() => exitObserved);
+
+      const exits: Array<{ readonly code: number | null; readonly signal: NodeJS.Signals | null }> =
+        [];
+      runtime.onExit((exit) => exits.push(exit));
+      yield* Effect.yieldNow;
+
+      expect(exits).toEqual([{ code: 27, signal: null }]);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("force-kills a Pi process that ignores stdin and SIGTERM", () =>
+    Effect.gen(function* () {
+      const runtime = yield* makeRuntime({ T3_PI_MOCK_IGNORE_SIGTERM: "1" }, 1_000, 25);
+      const exits: Array<{ readonly code: number | null; readonly signal: NodeJS.Signals | null }> =
+        [];
+      runtime.onExit((exit) => exits.push(exit));
+      yield* runtime.getState();
+
+      yield* Effect.all([runtime.close, runtime.close], { concurrency: "unbounded" });
+
+      expect(runtime.getStderr()).toContain("Mock Pi ignored SIGTERM.");
+      expect(exits).toEqual([{ code: null, signal: "SIGKILL" }]);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 });

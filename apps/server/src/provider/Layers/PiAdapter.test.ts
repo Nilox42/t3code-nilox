@@ -308,6 +308,38 @@ describe("PiAdapter lifecycle and event mapping", () => {
     }).pipe(Effect.scoped, Effect.provide(testLayer), TestClock.withLive),
   );
 
+  it.effect("removes a session when Pi exits at the end of startup", () =>
+    Effect.gen(function* () {
+      const { adapter } = yield* makeFixture({
+        T3_PI_MOCK_EXIT_AFTER_RESPONSE: "get_state",
+        T3_PI_MOCK_EXIT_AFTER_RESPONSE_CODE: "29",
+        T3_PI_MOCK_EXIT_AFTER_RESPONSE_DELAY_MS: "0",
+      });
+      const threadId = ThreadId.make("pi-startup-exit");
+      const eventsFiber = yield* collectThrough(adapter.streamEvents, "session.exited").pipe(
+        Effect.forkScoped,
+      );
+      yield* Effect.yieldNow;
+
+      yield* adapter.startSession({
+        provider: PI,
+        threadId,
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      const events = yield* Fiber.join(eventsFiber);
+
+      expect(events.map((event) => event.type)).toEqual([
+        "session.started",
+        "thread.started",
+        "thread.metadata.updated",
+        "runtime.error",
+        "session.exited",
+      ]);
+      expect(yield* adapter.hasSession(threadId)).toBe(false);
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
   it.effect(
     "configures model/thinking and maps streamed text, reasoning, tools, usage, and completion",
     () =>

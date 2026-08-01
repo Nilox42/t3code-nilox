@@ -1281,12 +1281,18 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
               ...baseEvent(ctx),
               payload: { class: "transport_error", message },
             });
+            ctx.stopped = true;
+            ctx.unsubscribeEvent?.();
+            ctx.unsubscribeExit?.();
+            sessions.delete(ctx.threadId);
             yield* offer({
               type: "session.exited",
               ...(yield* stamp),
               ...baseEvent(ctx),
               payload: { exitKind: "error", reason: message, recoverable: false },
             });
+            yield* Queue.shutdown(ctx.eventQueue);
+            yield* Scope.close(ctx.scope, Exit.void).pipe(Effect.ignore);
           });
 
     const startSession: PiAdapterShape["startSession"] = (input) =>
@@ -1494,15 +1500,6 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
           ctx.unsubscribeExit = runtime.onExit((exit) => {
             Queue.offerUnsafe(eventQueue, { type: "exit", ...exit });
           });
-          ctx.eventFiber = yield* Stream.fromQueue(eventQueue).pipe(
-            Stream.runForEach((signal) => handleSignal(ctx, signal)),
-            Effect.catchCause((cause) =>
-              Cause.hasInterruptsOnly(cause)
-                ? Effect.void
-                : Effect.logError("Pi event stream failed", cause),
-            ),
-            Effect.forkIn(sessionScope),
-          );
           yield* offer({
             type: "session.started",
             ...(yield* stamp),
@@ -1556,6 +1553,15 @@ export function makePiAdapter(settings: PiSettings, options: PiAdapterOptions) {
               },
             });
           }
+          ctx.eventFiber = yield* Stream.fromQueue(eventQueue).pipe(
+            Stream.runForEach((signal) => handleSignal(ctx, signal)),
+            Effect.catchCause((cause) =>
+              Cause.hasInterruptsOnly(cause)
+                ? Effect.void
+                : Effect.logError("Pi event stream failed", cause),
+            ),
+            Effect.forkIn(sessionScope),
+          );
           return { ...ctx.session };
         }).pipe(
           Effect.mapError((cause) => mapAdapterError("startSession", cause)),

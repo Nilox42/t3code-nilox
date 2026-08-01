@@ -221,6 +221,11 @@ interface RequestOptions {
   readonly timeoutMs?: number;
 }
 
+interface PiProcessExit {
+  readonly code: number | null;
+  readonly signal: NodeJS.Signals | null;
+}
+
 export interface PiRpcSessionRuntime {
   readonly getState: () => Effect.Effect<PiRpcState, PiRpcError>;
   readonly getAvailableModels: () => Effect.Effect<ReadonlyArray<PiModel>, PiRpcError>;
@@ -449,12 +454,15 @@ export const makePiRpcSessionRuntime = Effect.fn("makePiRpcSessionRuntime")(func
   let closed = false;
   let requestSequence = 0;
   let terminalError: PiRpcError | undefined;
+  let exitResult: PiProcessExit | undefined;
+  let resolveExit!: (exit: PiProcessExit) => void;
+  const exitPromise = new Promise<PiProcessExit>((resolve) => {
+    resolveExit = resolve;
+  });
   const listeners = new Set<(event: PiRpcEvent, raw: unknown) => void>();
   const bufferedStartupEvents: Array<{ readonly event: PiRpcEvent; readonly raw: unknown }> = [];
   let eventListenerAttached = false;
-  const exitListeners = new Set<
-    (exit: { readonly code: number | null; readonly signal: NodeJS.Signals | null }) => void
-  >();
+  const exitListeners = new Set<(exit: PiProcessExit) => void>();
   const settledWaiters = new Set<{
     readonly resolve: () => void;
     readonly reject: (error: PiRpcError) => void;
@@ -605,9 +613,14 @@ export const makePiRpcSessionRuntime = Effect.fn("makePiRpcSessionRuntime")(func
   child.on("error", (cause) => {
     rejectOutstanding(asPiRpcError("process", "Pi process failed.", cause, boundedStderr()));
   });
-  child.on("exit", (code, signal) => {
+  const recordExit = (code: number | null, signal: NodeJS.Signals | null) => {
+    if (exitResult) return;
+    const exit = { code, signal };
+    exitResult = exit;
     closed = true;
-    for (const listener of exitListeners) listener({ code, signal });
+    resolveExit(exit);
+    for (const listener of exitListeners) listener(exit);
+    exitListeners.clear();
     if (stdoutBuffer.length > 0) {
       protocolFailure("Pi exited with an unterminated JSONL record.");
       stdoutBuffer = "";
@@ -622,7 +635,9 @@ export const makePiRpcSessionRuntime = Effect.fn("makePiRpcSessionRuntime")(func
         ),
       );
     }
-  });
+  };
+  child.on("exit", recordExit);
+  child.on("close", recordExit);
 
   const request = (
     command: string,
@@ -749,22 +764,33 @@ export const makePiRpcSessionRuntime = Effect.fn("makePiRpcSessionRuntime")(func
           : asPiRpcError("abort", "Failed aborting the active Pi turn.", cause, boundedStderr()),
     });
 
-  const close = Effect.promise(async () => {
-    if (closed) return;
-    for (const request of pending.values()) clearTimeout(request.timer);
-    child.stdin.end();
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(() => {
-        if (!closed && !child.killed) child.kill("SIGTERM");
-        resolve();
-      }, options.shutdownGraceMs ?? DEFAULT_SHUTDOWN_GRACE_MS);
-      child.once("exit", () => {
+  const waitForExit = (timeoutMs: number): Promise<boolean> => {
+    if (exitResult) return Promise.resolve(true);
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (exited: boolean) => {
+        if (settled) return;
+        settled = true;
         clearTimeout(timer);
-        resolve();
-      });
+        resolve(exited);
+      };
+      const timer = setTimeout(() => finish(false), timeoutMs);
+      void exitPromise.then(() => finish(true));
     });
-    if (!closed && !child.killed) child.kill();
-  });
+  };
+  let closePromise: Promise<void> | undefined;
+  const closeChild = async () => {
+    if (exitResult) return;
+    for (const request of pending.values()) clearTimeout(request.timer);
+    const graceMs = options.shutdownGraceMs ?? DEFAULT_SHUTDOWN_GRACE_MS;
+    if (child.stdin.writable) child.stdin.end();
+    if (await waitForExit(graceMs)) return;
+    if (!exitResult) child.kill("SIGTERM");
+    if (await waitForExit(graceMs)) return;
+    if (!exitResult) child.kill("SIGKILL");
+    await exitPromise;
+  };
+  const close = Effect.promise(() => (closePromise ??= closeChild()));
   yield* Scope.addFinalizer(scope, close);
 
   return {
@@ -837,6 +863,10 @@ export const makePiRpcSessionRuntime = Effect.fn("makePiRpcSessionRuntime")(func
       return () => listeners.delete(listener);
     },
     onExit: (listener) => {
+      if (exitResult) {
+        listener(exitResult);
+        return () => {};
+      }
       exitListeners.add(listener);
       return () => exitListeners.delete(listener);
     },
