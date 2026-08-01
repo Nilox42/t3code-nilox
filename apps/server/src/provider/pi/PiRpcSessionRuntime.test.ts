@@ -93,6 +93,7 @@ describe("Pi RPC protocol helpers", () => {
   it("rejects user arguments that would take ownership of the Pi session", () => {
     for (const args of [
       "--mode rpc",
+      "--mode=rpc",
       "--print",
       "--provider anthropic",
       "--model test",
@@ -103,11 +104,32 @@ describe("Pi RPC protocol helpers", () => {
       "--session old.jsonl",
       "--no-session",
       "--mcp-config /tmp/other.json",
+      "--help",
+      "-h",
+      "--version",
+      "-v",
+      "--export session.jsonl",
+      "--export=output.html",
+      "--list-models",
+      "--list-models=sonnet",
+      "--",
     ]) {
       expect(() => validatePiLaunchArgs(args)).toThrow(/managed by T3 Code/i);
     }
-    expect(buildPiManagedArgs({ binaryPath: "pi", cwd: "/tmp", launchArgs: "--verbose" })).toEqual([
+    expect(
+      buildPiManagedArgs({
+        binaryPath: "pi",
+        cwd: "/tmp",
+        launchArgs: "--offline --verbose --tools read,bash --exclude-tools=write -t grep,find",
+      }),
+    ).toEqual([
+      "--offline",
       "--verbose",
+      "--tools",
+      "read,bash",
+      "--exclude-tools=write",
+      "-t",
+      "grep,find",
       "--mode",
       "rpc",
       "--no-approve",

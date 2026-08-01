@@ -430,7 +430,8 @@ export const PiSettings = makeProviderSettingsSchema(
       Schema.withDecodingDefault(Effect.succeed("")),
       Schema.annotateKey({
         title: "Launch arguments",
-        description: "Additional safe CLI arguments passed to Pi on session start.",
+        description:
+          "Additional RPC-compatible CLI arguments passed to Pi on session start. Flags that replace T3-managed process behavior are rejected.",
         providerSettingsForm: {
           placeholder: "Optional",
           clearWhenEmpty: "omit",

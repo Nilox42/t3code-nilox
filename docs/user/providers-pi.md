@@ -17,7 +17,7 @@ Start `pi`, run `/login`, and authenticate an upstream provider. API keys suppli
 
 - **Binary path** defaults to `pi`. Set an absolute path when the CLI is not on the server's `PATH`.
 - **Agent directory** is optional and maps to `PI_CODING_AGENT_DIR`. Provider instances that use different agent directories keep independent Pi state.
-- **Launch arguments** adds ordinary Pi CLI arguments. T3 Code rejects arguments that would take ownership of RPC mode, model selection, credentials, trust, or session persistence.
+- **Launch arguments** adds flags compatible with a long-lived RPC session, such as `--offline`, `--verbose`, `--tools`, and `--exclude-tools`. T3 Code rejects arguments that would take ownership of RPC mode, prompting, model selection, credentials, trust, or session persistence, including print-and-exit flags such as `--help`, `--version`, `--export`, and `--list-models`.
 - **Trust project resources** is off by default. T3 Code launches Pi with `--no-approve`, which prevents project-local extensions, skills, prompt templates, and context files from loading. Enable this only for projects whose Pi resources you trust.
 
 Global Pi resources load normally during interactive sessions. Each T3 Code thread owns one persistent Pi process and can resume from its Pi session file. A missing persisted session file is reported instead of silently starting without its prior context.

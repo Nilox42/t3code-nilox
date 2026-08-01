@@ -282,12 +282,31 @@ const RESERVED_LONG_FLAGS = new Set([
   "session-dir",
   "no-session",
   "mcp-config",
+  "help",
+  "version",
+  "export",
+  "list-models",
 ]);
-const RESERVED_SHORT_FLAGS = new Set(["-p", "-a", "-na", "-r", "-c"]);
+const RESERVED_SHORT_FLAGS = new Set(["-p", "-a", "-na", "-r", "-c", "-h", "-v"]);
+const COMPATIBLE_VALUE_LONG_FLAGS = new Set([
+  "system-prompt",
+  "append-system-prompt",
+  "name",
+  "models",
+  "tools",
+  "exclude-tools",
+  "extension",
+  "skill",
+  "prompt-template",
+  "theme",
+]);
+const COMPATIBLE_VALUE_SHORT_FLAGS = new Set(["-n", "-t", "-xt", "-e"]);
 
 export function validatePiLaunchArgs(launchArgs: string | undefined): ReadonlyArray<string> {
   const tokens = [...tokenizeCliArgs(launchArgs)];
-  for (const token of tokens) {
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (token === undefined) continue;
     if (RESERVED_SHORT_FLAGS.has(token)) {
       throw new PiRpcError({
         operation: "launch",
@@ -296,12 +315,29 @@ export function validatePiLaunchArgs(launchArgs: string | undefined): ReadonlyAr
     }
     if (token.startsWith("--")) {
       const flag = token.slice(2).split("=", 1)[0] ?? "";
+      if (!flag) {
+        throw new PiRpcError({
+          operation: "launch",
+          detail: "Launch argument '--' is managed by T3 Code and cannot be overridden.",
+        });
+      }
       if (RESERVED_LONG_FLAGS.has(flag)) {
         throw new PiRpcError({
           operation: "launch",
           detail: `Launch argument '--${flag}' is managed by T3 Code and cannot be overridden.`,
         });
       }
+      if (
+        !token.includes("=") &&
+        COMPATIBLE_VALUE_LONG_FLAGS.has(flag) &&
+        !tokens[index + 1]?.startsWith("-")
+      ) {
+        index += 1;
+      }
+      continue;
+    }
+    if (COMPATIBLE_VALUE_SHORT_FLAGS.has(token) && !tokens[index + 1]?.startsWith("-")) {
+      index += 1;
       continue;
     }
     if (!token.startsWith("-")) {
