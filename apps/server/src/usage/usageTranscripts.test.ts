@@ -2,8 +2,10 @@ import { describe, expect, it } from "@effect/vitest";
 
 import {
   initialCodexScanState,
+  initialPiScanState,
   parseClaudeLine,
   parseCodexLine,
+  parsePiLine,
   totalTokens,
 } from "./usageTranscripts.ts";
 
@@ -233,6 +235,143 @@ describe("parseCodexLine", () => {
       );
       expect(record).not.toBeNull();
     });
+  });
+});
+
+describe("parsePiLine", () => {
+  const header = JSON.stringify({
+    type: "session",
+    version: 3,
+    id: "019fd090-e268-7ffa-842d-e328c41c79a5",
+    timestamp: "2026-08-07T04:00:00.000Z",
+    cwd: "/home/theo/project",
+  });
+  const assistant = (overrides: Record<string, unknown> = {}) =>
+    JSON.stringify({
+      type: "message",
+      id: "a1b2c3d4",
+      parentId: "11223344",
+      timestamp: "2026-08-07T04:05:13.944Z",
+      message: {
+        role: "assistant",
+        provider: "openai-codex",
+        model: "gpt-5.6-sol",
+        responseModel: "gpt-5.6-sol-2026-08-01",
+        usage: {
+          input: 200,
+          output: 50,
+          cacheRead: 1000,
+          cacheWrite: 25,
+          reasoning: 20,
+          totalTokens: 1275,
+          cost: { input: 0.1, output: 0.2, cacheRead: 0.01, cacheWrite: 0.02, total: 0.33 },
+        },
+        ...overrides,
+      },
+    });
+
+  it("extracts Pi assistant usage, model identity, and reported cost", () => {
+    const state = initialPiScanState();
+    parsePiLine(header, state);
+    const record = parsePiLine(assistant(), state);
+
+    expect(record).toEqual({
+      provider: "pi",
+      timestampMs: Date.parse("2026-08-07T04:05:13.944Z"),
+      model: "openai-codex/gpt-5.6-sol-2026-08-01",
+      sessionId: "019fd090-e268-7ffa-842d-e328c41c79a5",
+      totals: {
+        uncachedInputTokens: 200,
+        cachedInputTokens: 1000,
+        cacheCreationTokens: 25,
+        outputTokens: 50,
+        reasoningTokens: 20,
+      },
+      reportedCostUsd: 0.33,
+      dedupeKey: "pi:a1b2c3d4:2026-08-07T04:05:13.944Z",
+    });
+  });
+
+  it("falls back to the preceding model change for older assistant entries", () => {
+    const state = initialPiScanState();
+    parsePiLine(
+      JSON.stringify({
+        type: "model_change",
+        id: "model123",
+        timestamp: "2026-08-07T04:01:00.000Z",
+        provider: "anthropic",
+        modelId: "claude-sonnet-4-5",
+      }),
+      state,
+    );
+
+    const record = parsePiLine(
+      assistant({ provider: undefined, model: undefined, responseModel: undefined }),
+      state,
+    );
+    expect(record?.model).toBe("anthropic/claude-sonnet-4-5");
+  });
+
+  it("groups compaction usage the same way as Pi session statistics", () => {
+    const state = initialPiScanState();
+    parsePiLine(header, state);
+    const record = parsePiLine(
+      JSON.stringify({
+        type: "compaction",
+        id: "summary1",
+        parentId: "a1b2c3d4",
+        timestamp: "2026-08-07T04:06:00.000Z",
+        summary: "summary",
+        firstKeptEntryId: "a1b2c3d4",
+        tokensBefore: 1000,
+        usage: {
+          input: 100,
+          output: 20,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 120,
+          cost: { input: 0.01, output: 0.02, cacheRead: 0, cacheWrite: 0, total: 0.03 },
+        },
+      }),
+      state,
+    );
+
+    expect(record?.model).toBe("Tools/summaries");
+    expect(record?.reportedCostUsd).toBe(0.03);
+    expect(record?.sessionId).toBe("019fd090-e268-7ffa-842d-e328c41c79a5");
+  });
+
+  it("gives copied fork entries the same cross-file dedupe key", () => {
+    const original = parsePiLine(assistant(), initialPiScanState());
+    const copied = parsePiLine(assistant(), initialPiScanState());
+
+    expect(original?.dedupeKey).toBe(copied?.dedupeKey);
+  });
+
+  it("ignores non-usage and malformed entries", () => {
+    const state = initialPiScanState();
+    expect(
+      parsePiLine(JSON.stringify({ type: "message", message: { role: "user" } }), state),
+    ).toBeNull();
+    expect(parsePiLine("not json", state)).toBeNull();
+  });
+
+  it("does not count zero-usage error responses as activity", () => {
+    const record = parsePiLine(
+      assistant({
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+      }),
+      initialPiScanState(),
+    );
+
+    expect(record).toBeNull();
   });
 });
 

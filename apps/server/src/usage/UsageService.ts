@@ -37,6 +37,9 @@ import { ServerConfig } from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { resolveClaudeHomePath } from "../provider/Drivers/ClaudeHome.ts";
 import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
+import { mergeProviderInstanceEnvironment } from "../provider/ProviderInstanceEnvironment.ts";
+import { resolvePiAgentDirectory } from "../provider/pi/PiAgentDirectory.ts";
+import { collectPiUsageConfigurations } from "./piUsageConfigurations.ts";
 import { UsageAggregator } from "./usageAggregation.ts";
 import { parseRateTable, type RateTable } from "./usagePricing.ts";
 import {
@@ -196,7 +199,7 @@ export const make = Effect.gen(function* () {
       return nestedExists ? nested : path.join(homePath, "projects");
     });
 
-  /** Resolves the transcript directory for each provider. */
+  /** Resolves every distinct transcript directory configured on this server. */
   const resolveTranscriptDirs = Effect.fn("UsageService.resolveTranscriptDirs")(function* () {
     // A settings failure must surface as an error: swallowing it here would
     // present "zero usage from every provider" as a valid answer.
@@ -218,9 +221,23 @@ export const make = Effect.gen(function* () {
     const claudeDir = yield* resolveClaudeTranscriptDir(claudeHome);
     const codexLayout = yield* resolveCodexHomeLayout(settings.providers.codex);
 
+    // Mirror provider-instance hydration: an explicit default slot replaces
+    // the legacy Pi config, while additional Pi instances remain additive.
+    const seenPiDirs = new Set<string>();
+    const piDirs: { readonly provider: "pi"; readonly dir: string }[] = [];
+    for (const pi of collectPiUsageConfigurations(settings)) {
+      const environment = mergeProviderInstanceEnvironment(pi.environment);
+      const agentDir = yield* resolvePiAgentDirectory(pi.settings, environment, config.cwd);
+      const sessionsDir = path.join(agentDir.path, "sessions");
+      if (seenPiDirs.has(sessionsDir)) continue;
+      seenPiDirs.add(sessionsDir);
+      piDirs.push({ provider: "pi", dir: sessionsDir });
+    }
+
     return [
       { provider: "claude" as const, dir: claudeDir },
       { provider: "codex" as const, dir: path.join(codexLayout.sharedHomePath, "sessions") },
+      ...piDirs,
     ];
   });
 
@@ -304,7 +321,10 @@ export const make = Effect.gen(function* () {
     const hostId = NodeOS.hostname();
     // The home resolvers ask for `Path` themselves; satisfy them from the
     // instance we already hold so `readSummary` stays context-free.
-    const dirs = yield* resolveTranscriptDirs().pipe(Effect.provideService(Path.Path, path));
+    const dirs = yield* resolveTranscriptDirs().pipe(
+      Effect.provideService(Path.Path, path),
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+    );
     const windowStart = DateTime.make(`${input.sinceDay}T00:00:00Z`);
     if (Option.isNone(windowStart)) {
       return yield* new UsageReadError({
@@ -326,6 +346,7 @@ export const make = Effect.gen(function* () {
     const walkedRoots: string[] = [];
 
     for (const { provider, dir } of dirs) {
+      const sourceIndex = sources.length;
       const volumeId = yield* Effect.promise(() => readDirectoryVolumeId(dir));
       const exists = yield* fileSystem
         .exists(dir)
@@ -363,7 +384,7 @@ export const make = Effect.gen(function* () {
         for (const record of records) {
           // Only sessions that contributed in-window count: the mtime slack
           // admits boundary files whose records fall outside the range.
-          if (aggregator.add(record) && record.sessionId.length > 0) {
+          if (aggregator.add(record, sourceIndex) && record.sessionId.length > 0) {
             sessionIds.add(record.sessionId);
           }
         }
