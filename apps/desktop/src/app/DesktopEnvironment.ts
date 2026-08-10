@@ -17,6 +17,7 @@ import {
   OFFICIAL_DESKTOP_DISTRIBUTION,
   type DesktopDistribution,
 } from "@t3tools/shared/desktopDistribution";
+import { resolveDesktopBaseDir, resolveDesktopStateDir } from "./DesktopStatePaths.ts";
 import { isNightlyDesktopVersion } from "../updates/updateChannels.ts";
 
 export interface MakeDesktopEnvironmentInput {
@@ -72,6 +73,8 @@ export class DesktopEnvironment extends Context.Service<
     readonly appUserModelId: string;
     readonly linuxDesktopEntryName: string;
     readonly linuxWmClass: string;
+    readonly linuxApplicationsDir: string;
+    readonly appImagePath: Option.Option<string>;
     readonly userDataDirName: string;
     readonly legacyUserDataDirName: string | undefined;
     readonly defaultDesktopSettings: DesktopAppSettings.DesktopSettings;
@@ -153,10 +156,12 @@ const make = Effect.fn("desktop.environment.make")(function* (
       : input.platform === "darwin"
         ? path.join(homeDirectory, "Library", "Application Support")
         : Option.getOrElse(config.xdgConfigHome, () => path.join(homeDirectory, ".config"));
-  const configuredBaseDir = config.t3Home;
-  const baseDir = Option.getOrElse(configuredBaseDir, () =>
-    path.join(homeDirectory, distribution.defaultHomeDirName),
-  );
+  const baseDir = resolveDesktopBaseDir({
+    homeDirectory,
+    joinPath: path.join,
+    t3Home: config.t3Home,
+    defaultHomeDirName: distribution.defaultHomeDirName,
+  });
   const rootDir = path.resolve(input.dirname, "../../..");
   const appRoot = input.isPackaged ? input.appPath : rootDir;
   const branding = resolveDesktopAppBranding({
@@ -165,10 +170,12 @@ const make = Effect.fn("desktop.environment.make")(function* (
     distribution,
   });
   const displayName = branding.displayName;
-  const stateDir = path.join(
+  const stateDir = resolveDesktopStateDir({
     baseDir,
-    isDevelopment && Option.isNone(configuredBaseDir) ? "dev" : "userdata",
-  );
+    isDevelopment,
+    joinPath: path.join,
+    t3Home: config.t3Home,
+  });
   const userDataDirName = isDevelopment
     ? distribution.developmentUserDataDirName
     : distribution.productionUserDataDirName;
@@ -178,6 +185,10 @@ const make = Effect.fn("desktop.environment.make")(function* (
         ? "T3 Code (Dev)"
         : "T3 Code (Alpha)"
       : undefined;
+  const linuxApplicationsDir = path.join(
+    Option.getOrElse(config.xdgDataHome, () => path.join(homeDirectory, ".local", "share")),
+    "applications",
+  );
   const resourcesPath = input.resourcesPath;
 
   return DesktopEnvironment.of({
@@ -224,6 +235,8 @@ const make = Effect.fn("desktop.environment.make")(function* (
       ? `${distribution.executableName}-dev.desktop`
       : distribution.linuxDesktopEntryName,
     linuxWmClass: isDevelopment ? `${distribution.linuxWmClass}-dev` : distribution.linuxWmClass,
+    linuxApplicationsDir,
+    appImagePath: config.appImagePath,
     userDataDirName,
     legacyUserDataDirName,
     defaultDesktopSettings: DesktopAppSettings.resolveDefaultDesktopSettings(input.appVersion),

@@ -55,7 +55,6 @@ const makeElectronAppLayer = (calls: ElectronAppCalls) =>
         calls.setAboutPanelOptions.push(options);
       }),
     setAppUserModelId: () => Effect.void,
-    requestSingleInstanceLock: Effect.succeed(true),
     getAppMetrics: Effect.succeed([]),
     isDefaultProtocolClient: () => Effect.succeed(false),
     setAsDefaultProtocolClient: () => Effect.succeed(true),
@@ -66,6 +65,7 @@ const makeElectronAppLayer = (calls: ElectronAppCalls) =>
       }),
     appendCommandLineSwitch: () => Effect.void,
     onBeforeQuitForUpdate: () => Effect.void,
+    removeCommandLineSwitch: () => Effect.void,
     on: () => Effect.void,
   } satisfies ElectronApp.ElectronApp["Service"]);
 

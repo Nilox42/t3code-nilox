@@ -149,7 +149,7 @@ describe("Pi Agent provider probe", () => {
         displayName: "Pi Agent",
         badgeLabel: "Early Access",
         showInteractionModeToggle: false,
-        version: "0.82.1",
+        version: "0.84.1",
       });
       expect(provider.models[0]?.slug).toBe("mock-provider/mock/model");
       expect(provider.slashCommands.map((command) => command.name)).toEqual([
@@ -190,7 +190,7 @@ describe("Pi Agent provider probe", () => {
 
       expect(provider.auth.status).toBe("authenticated");
       expect(provider.status).toBe("ready");
-      expect(provider.message).toMatch(/Pi Agent 0\.82\.1 is ready/);
+      expect(provider.message).toMatch(/Pi Agent 0\.84\.1 is ready/);
       expect(provider.message).toMatch(/MCP adapter/);
       expect(provider.models).not.toHaveLength(0);
     }),
