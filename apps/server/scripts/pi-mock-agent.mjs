@@ -15,7 +15,7 @@ if (args.includes("--version")) {
   if (env.T3_PI_MOCK_VERSION_BEHAVIOR === "timeout") {
     setInterval(() => {}, 60_000);
   } else {
-    process.stdout.write(`${env.T3_PI_MOCK_VERSION || "0.82.1"}\n`);
+    process.stdout.write(`${env.T3_PI_MOCK_VERSION || "0.84.1"}\n`);
     process.exit(Number(env.T3_PI_MOCK_VERSION_EXIT_CODE || 0));
   }
 }
@@ -262,7 +262,6 @@ function emitPromptEvents() {
     write({ type: "message_start", message: firstMessage });
     write({
       type: "message_update",
-      message: firstMessage,
       assistantMessageEvent: {
         type: "text_delta",
         contentIndex: 0,
@@ -271,7 +270,6 @@ function emitPromptEvents() {
     });
     write({
       type: "message_update",
-      message: firstMessage,
       assistantMessageEvent: {
         type: "text_delta",
         contentIndex: 0,
@@ -317,7 +315,6 @@ function emitPromptEvents() {
     write({ type: "message_start", message: finalMessage });
     write({
       type: "message_update",
-      message: finalMessage,
       assistantMessageEvent: {
         type: "text_delta",
         contentIndex: 0,

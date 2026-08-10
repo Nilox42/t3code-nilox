@@ -64,10 +64,12 @@ const makeRuntime = Effect.fn("makePiMockRuntime")(function* (
 describe("Pi RPC protocol helpers", () => {
   it("parses versions and enforces Pi 0.82+", () => {
     expect(parsePiVersion("@earendil-works/pi-coding-agent 0.82.1")).toBe("0.82.1");
+    expect(parsePiVersion("@earendil-works/pi-coding-agent 0.84.1")).toBe("0.84.1");
     expect(comparePiVersions("0.82.0", "0.82.0")).toBe(0);
     expect(comparePiVersions("0.83.0", "0.82.9")).toBeGreaterThan(0);
     expect(isSupportedPiVersion("0.81.9")).toBe(false);
     expect(isSupportedPiVersion("0.82.0")).toBe(true);
+    expect(isSupportedPiVersion("0.84.1")).toBe(true);
   });
 
   it("splits model slugs only at the first slash", () => {
