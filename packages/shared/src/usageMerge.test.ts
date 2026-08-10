@@ -12,6 +12,7 @@ import { mergeUsage, type EnvironmentUsage } from "./usageMerge.ts";
 
 function bucket(overrides: Partial<UsageBucket> = {}): UsageBucket {
   return {
+    sourceIndex: 0,
     day: "2026-08-07" as UsageDay,
     provider: "claude",
     model: "claude-fable-5",
@@ -124,7 +125,15 @@ describe("mergeUsage", () => {
         environment(
           "env-b",
           summary(
-            [bucket(), bucket({ provider: "codex", model: "gpt-5.6-sol", costUsd: 4 })],
+            [
+              bucket(),
+              bucket({
+                sourceIndex: 1,
+                provider: "codex",
+                model: "gpt-5.6-sol",
+                costUsd: 4,
+              }),
+            ],
             [sharedClaude, { provider: "codex", hostId: "mac", homePath: "/home/theo/.codex" }],
           ),
         ),
@@ -171,7 +180,13 @@ describe("mergeUsage", () => {
           summary(
             [
               bucket({ costUsd: 75 }),
-              bucket({ provider: "codex", model: "gpt-5.6-sol", costUsd: 25, unpricedRecords: 5 }),
+              bucket({
+                sourceIndex: 1,
+                provider: "codex",
+                model: "gpt-5.6-sol",
+                costUsd: 25,
+                unpricedRecords: 5,
+              }),
             ],
             [
               { provider: "claude", hostId: "mac", homePath: "/a/.claude" },
@@ -221,6 +236,43 @@ describe("mergeUsage", () => {
     );
 
     expect(merged.costUsd).toBe(10);
+    expect(merged.duplicateSources).toHaveLength(1);
+  });
+
+  it("deduplicates one Pi directory without dropping another Pi instance", () => {
+    const sharedPi = {
+      provider: "pi" as const,
+      hostId: "mac",
+      homePath: "/Users/theo/.pi/agent/sessions",
+      volumeId: "16777220:1234",
+    };
+    const merged = mergeUsage(
+      [
+        environment("env-a", summary([bucket({ provider: "pi", costUsd: 10 })], [sharedPi])),
+        environment(
+          "env-b",
+          summary(
+            [
+              bucket({ provider: "pi", costUsd: 10 }),
+              bucket({ sourceIndex: 1, provider: "pi", costUsd: 4 }),
+            ],
+            [
+              sharedPi,
+              {
+                provider: "pi",
+                hostId: "mac",
+                homePath: "/Users/theo/.pi/work/sessions",
+                volumeId: "16777220:5678",
+              },
+            ],
+          ),
+        ),
+      ],
+      USAGE_CONTRACT_VERSION,
+    );
+
+    expect(merged.costUsd).toBe(14);
+    expect(merged.records).toBe(10);
     expect(merged.duplicateSources).toHaveLength(1);
   });
 

@@ -129,4 +129,19 @@ describe("UsageAggregator", () => {
 
     expect(result.buckets).toHaveLength(3);
   });
+
+  it("keeps matching provider and model usage separate by transcript source", () => {
+    const aggregator = new UsageAggregator({
+      timeZone: "UTC",
+      sinceDay: "2026-08-01",
+      untilDay: "2026-08-31",
+      rates,
+    });
+    aggregator.add(record({ provider: "pi" }), 0);
+    aggregator.add(record({ provider: "pi" }), 1);
+
+    const result = aggregator.finish();
+    expect(result.buckets).toHaveLength(2);
+    expect(result.buckets.map((bucket) => bucket.sourceIndex)).toEqual([0, 1]);
+  });
 });

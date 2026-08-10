@@ -1,7 +1,7 @@
 /**
  * Pure parsers for the provider CLIs' on-disk session transcripts.
  *
- * Both parsers are line-at-a-time reducers so callers can stream large files
+ * The parsers are line-at-a-time reducers so callers can stream large files
  * without materialising them. Neither touches the filesystem.
  *
  * @module usageTranscripts
@@ -68,7 +68,7 @@ export function totalTokens(totals: UsageTokenTotals): number {
  * an order of magnitude.
  */
 export function mightCarryUsage(line: string, provider: UsageProviderKind): boolean {
-  return provider === "claude" ? line.includes('"usage"') : line.includes('"token_count"');
+  return provider === "codex" ? line.includes('"token_count"') : line.includes('"usage"');
 }
 
 /* -------------------------------------------------------------------------- */
@@ -294,6 +294,125 @@ export function parseCodexLine(line: string, state: CodexScanState): UsageRecord
     // Events surviving the fork-copy suppression above are unique to this
     // rollout, so they need no global dedup.
     dedupeKey: null,
+  };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Pi Agent                                                                   */
+/* -------------------------------------------------------------------------- */
+
+/** Rolling file-local metadata needed by Pi entries that omit a model. */
+export interface PiScanState {
+  model: string;
+  sessionId: string;
+}
+
+export function initialPiScanState(): PiScanState {
+  return { model: "", sessionId: "" };
+}
+
+function piModel(provider: unknown, model: unknown): string {
+  if (typeof model !== "string" || model.length === 0) return "";
+  return typeof provider === "string" && provider.length > 0 ? `${provider}/${model}` : model;
+}
+
+/**
+ * Parses one entry from a Pi session JSONL file.
+ *
+ * Assistant messages carry their provider, model, token counts, and cost
+ * directly. Pi also records usage from tool-provided summaries, compaction,
+ * and branch summaries; those are grouped under the same `Tools/summaries`
+ * label Pi uses in its own session statistics.
+ *
+ * Cross-file de-duplication is required because Pi forks copy the selected
+ * history into the new session file. Entry ids are only unique within a file,
+ * so the original timestamp is included to avoid collisions between unrelated
+ * sessions while keeping copied entries identical.
+ */
+export function parsePiLine(line: string, state: PiScanState): UsageRecord | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null) return null;
+
+  const entry = parsed as Record<string, unknown>;
+  if (entry["type"] === "session") {
+    if (typeof entry["id"] === "string") state.sessionId = entry["id"];
+    return null;
+  }
+
+  if (entry["type"] === "model_change") {
+    state.model = piModel(entry["provider"], entry["modelId"]);
+    return null;
+  }
+
+  let usage: unknown;
+  let model = "";
+  if (entry["type"] === "message") {
+    const message = entry["message"];
+    if (typeof message !== "object" || message === null) return null;
+    const messageRecord = message as Record<string, unknown>;
+    const role = messageRecord["role"];
+
+    if (role === "assistant") {
+      const responseModel = messageRecord["responseModel"] ?? messageRecord["model"];
+      const messageModel = piModel(messageRecord["provider"], responseModel);
+      if (messageModel.length > 0) state.model = messageModel;
+      model = messageModel || state.model;
+      usage = messageRecord["usage"];
+    } else if (role === "toolResult") {
+      model = "Tools/summaries";
+      usage = messageRecord["usage"];
+    } else {
+      return null;
+    }
+  } else if (entry["type"] === "compaction" || entry["type"] === "branch_summary") {
+    model = "Tools/summaries";
+    usage = entry["usage"];
+  } else {
+    return null;
+  }
+
+  if (model.length === 0 || typeof usage !== "object" || usage === null) return null;
+  const timestampMs = parseTimestampMs(entry["timestamp"]);
+  if (timestampMs === null) return null;
+  const usageRecord = usage as Record<string, unknown>;
+  const cost = usageRecord["cost"];
+  const totalCost =
+    typeof cost === "object" && cost !== null
+      ? (cost as Record<string, unknown>)["total"]
+      : undefined;
+  const reportedCostUsd =
+    typeof totalCost === "number" && Number.isFinite(totalCost) && totalCost >= 0
+      ? totalCost
+      : null;
+  const outputTokens = int(usageRecord["output"]);
+  const totals: UsageTokenTotals = {
+    uncachedInputTokens: int(usageRecord["input"]),
+    cachedInputTokens: int(usageRecord["cacheRead"]),
+    cacheCreationTokens: int(usageRecord["cacheWrite"]),
+    outputTokens,
+    reasoningTokens: Math.min(
+      outputTokens,
+      int(usageRecord["reasoning"] ?? usageRecord["reasoningOutput"]),
+    ),
+  };
+  if (totalTokens(totals) === 0 && (reportedCostUsd === null || reportedCostUsd === 0)) return null;
+
+  const entryId = typeof entry["id"] === "string" ? entry["id"] : null;
+  const timestamp = typeof entry["timestamp"] === "string" ? entry["timestamp"] : null;
+
+  return {
+    provider: "pi",
+    timestampMs,
+    model,
+    sessionId: state.sessionId,
+    totals,
+    reportedCostUsd,
+    dedupeKey: entryId === null || timestamp === null ? null : `pi:${entryId}:${timestamp}`,
   };
 }
 

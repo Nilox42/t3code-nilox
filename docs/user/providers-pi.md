@@ -36,6 +36,8 @@ Only the first slash separates the provider, so model IDs may contain additional
 
 Pi Agent supports persistent and resumable threads, streaming assistant text and reasoning, tool activity, usage updates, image prompts, approvals, extension dialogs, interruption and steering, native fork rollback, multiple independently configured instances, and text generation for titles and Git workflows.
 
+The Usage page also includes historical Pi activity stored in each configured agent directory. It reads Pi's session transcripts, including sessions created outside T3 Code, and reports input, output, cache, reasoning, and API-equivalent cost data. Forked history is counted once, and agent directories shared by multiple environments or Pi provider instances are deduplicated. In-memory or otherwise unpersisted Pi sessions cannot appear in historical usage.
+
 Permission modes map to Pi as follows:
 
 - **Full access** allows every tool.
