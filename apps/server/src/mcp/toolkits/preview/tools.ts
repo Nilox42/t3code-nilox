@@ -29,6 +29,10 @@ const dependencies = [
   PreviewAutomationBroker.PreviewAutomationBroker,
 ];
 
+const PreviewActionResult = Schema.Record(Schema.String, Schema.Never).annotate({
+  description: "The preview action completed successfully.",
+});
+
 const browserTool = <T extends Tool.Any>(tool: T): T =>
   tool.annotate(Tool.OpenWorld, true).annotate(Tool.Destructive, true) as T;
 

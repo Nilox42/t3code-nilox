@@ -2,13 +2,14 @@
  * Usage reporting contract.
  *
  * Each environment scans the provider CLIs' own on-disk session transcripts
- * (`~/.claude/projects/**\/*.jsonl`, `~/.codex/sessions/**\/*.jsonl`, and
- * `~/.pi/agent/sessions/**\/*.jsonl`) rather than relying on T3 Code's own
+ * (`~/.claude/projects/**\/*.jsonl`, `~/.codex/sessions/**\/*.jsonl`,
+ * `~/.grok/sessions/**\/updates.jsonl`, and `~/.pi/agent/sessions/**\/*.jsonl`)
+ * rather than relying on T3 Code's own
  * orchestration projections, so usage stays complete even for turns that were
  * never driven through T3 Code. This mirrors the approach `ccusage` takes.
  *
- * Environments return pre-aggregated `(source, day, provider, model)` buckets.
- * Raw transcript records never cross the wire.
+ * Environments return pre-aggregated `(source, day, hourStart?, provider, model)`
+ * buckets. Raw transcript records never cross the wire.
  *
  * @module usage
  */
@@ -21,9 +22,17 @@ import { NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
  * client renders partial coverage when an environment reports an older version
  * rather than failing the whole page.
  */
-export const USAGE_CONTRACT_VERSION = 4 as const;
+export const USAGE_CONTRACT_VERSION = 6 as const;
 
-export const UsageProviderKind = Schema.Literals(["claude", "codex", "pi"]);
+/**
+ * Oldest {@link UsageSummary} version a current client will still merge.
+ *
+ * v6 adds source-indexed buckets so separate Pi Agent directories can be
+ * de-duplicated independently. Older summaries cannot be merged safely.
+ */
+export const USAGE_MERGE_COMPATIBLE_SINCE = 6 as const;
+
+export const UsageProviderKind = Schema.Literals(["claude", "codex", "grok", "pi"]);
 export type UsageProviderKind = typeof UsageProviderKind.Type;
 
 /**
@@ -38,6 +47,9 @@ export const UsageDay = TrimmedNonEmptyString.check(Schema.isPattern(USAGE_DAY_P
   Schema.brand("UsageDay"),
 );
 export type UsageDay = typeof UsageDay.Type;
+
+export const UsageResolution = Schema.Literals(["day", "hour"]);
+export type UsageResolution = typeof UsageResolution.Type;
 
 /**
  * Why a bucket's cost is what it is.
@@ -68,7 +80,8 @@ export const UsageTokenTotals = Schema.Struct({
 export type UsageTokenTotals = typeof UsageTokenTotals.Type;
 
 /**
- * One `(day, provider, model)` cell.
+ * One `(day, hourStart?, provider, model)` cell. `hourStart` is the UTC start
+ * instant of a rolling bucket and is present only for hourly requests.
  *
  * `costUsd` is the raw API-equivalent cost of these tokens. It is not money
  * spent: subscription plans bill separately. `unpricedRecords` counts records
@@ -79,6 +92,7 @@ export const UsageBucket = Schema.Struct({
   /** Index into the summary's `sources` array that produced this cell. */
   sourceIndex: NonNegativeInt,
   day: UsageDay,
+  hourStart: Schema.optional(TrimmedNonEmptyString),
   provider: UsageProviderKind,
   model: TrimmedNonEmptyString,
   totals: UsageTokenTotals,
@@ -167,6 +181,12 @@ export const UsageSummaryInput = Schema.Struct({
    * any window that crosses a DST boundary.
    */
   timeZone: TrimmedNonEmptyString,
+  /** Defaults to daily for older clients. */
+  resolution: Schema.optional(UsageResolution),
+  /** Inclusive UTC instant for an hourly rolling window. */
+  sinceTime: Schema.optional(TrimmedNonEmptyString),
+  /** Exclusive UTC instant for an hourly rolling window. */
+  untilTime: Schema.optional(TrimmedNonEmptyString),
 });
 export type UsageSummaryInput = typeof UsageSummaryInput.Type;
 

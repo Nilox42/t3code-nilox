@@ -1208,7 +1208,7 @@ describe("PiAdapter lifecycle and event mapping", () => {
       };
       const attachmentPath = path.join(
         serverConfig.attachmentsDir,
-        attachmentRelativePath(attachment),
+        attachmentRelativePath(attachment)!,
       );
       yield* fileSystem.makeDirectory(path.dirname(attachmentPath), { recursive: true });
       yield* fileSystem.writeFile(attachmentPath, Uint8Array.from([1, 2, 3, 4]));
