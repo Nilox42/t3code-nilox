@@ -41,7 +41,11 @@ permissions:
 jobs:
   check_changes:
     name: Check for changes since last nightly
-    if: github.event_name == 'schedule'
+    # Nightlies are upstream's release train. This schedule also fires in forks,
+    # from their default branch, where the Blacksmith runners every job here
+    # needs do not exist — so runs queue forever until the concurrency group
+    # overflows. Gate on the upstream repo and let fork runs skip in seconds.
+    if: github.event_name == 'schedule' && github.repository == 'pingdotgg/t3code'
     runs-on: blacksmith-8vcpu-ubuntu-2404
     outputs:
       has_changes: ${{ steps.check.outputs.has_changes }}
